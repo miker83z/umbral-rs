@@ -1,12 +1,12 @@
-use crypto_api_blake2::{Blake2Error, Blake2b};
-use openssl::bn::{BigNum, BigNumContext, MsbOption};
-use openssl::ec::{EcGroup, EcGroupRef, EcKey, EcPoint, EcPointRef, PointConversionForm};
-use openssl::ecdsa::EcdsaSig;
-use openssl::nid::Nid;
-use openssl::pkey::Private;
-use openssl::sha;
+pub use crate::curve::{CurveBN, CurvePoint, Params};
 
-pub fn _unsafe_hash_to_point_g(group: &EcGroupRef) -> EcPoint {
+use std::rc::Rc;
+
+use crypto_api_blake2::Blake2b;
+use openssl::bn::{BigNum, BigNumContext};
+use openssl::ec::{EcGroupRef, EcPoint, PointConversionForm};
+
+pub fn unsafe_hash_to_point(group: &EcGroupRef) -> EcPoint {
   let mut ctx = BigNumContext::new().unwrap();
 
   // TODO parameterize label
@@ -58,7 +58,7 @@ pub fn _unsafe_hash_to_point_g(group: &EcGroupRef) -> EcPoint {
   panic!("No point found");
 }
 
-pub fn _hash_to_curvebn(mut bytes: Vec<u8>, group: &EcGroup) -> BigNum {
+pub fn hash_to_curvebn(mut bytes: Vec<u8>, params: &Rc<Params>) -> CurveBN {
   let customization_string = String::from("hash_to_curvebn");
   let mut to_hash = customization_string.into_bytes();
   to_hash.append(&mut bytes);
@@ -67,23 +67,26 @@ pub fn _hash_to_curvebn(mut bytes: Vec<u8>, group: &EcGroup) -> BigNum {
   let hash = Blake2b::hash();
   let mut digest = vec![0; 64];
   hash.hash(&mut digest, &to_hash);
-  let digestBN = BigNum::from_slice(&digest).unwrap();
+
+  let digestBN = CurveBN::from_slice(&digest, params);
 
   // Get order minus one
-  let mut ctx = BigNumContext::new().unwrap();
-  let one = BigNum::from_dec_str("1").unwrap();
-  let mut order = BigNum::new().unwrap();
-  group.order(&mut order, &mut ctx).unwrap();
-  let mut order_minus_one = BigNum::new().unwrap();
+  let one = BigNum::from_dec_str("1").expect("Error in BN creation");
+  let order = params.order();
+  let mut order_minus_one = BigNum::new().expect("Error in BN creation");
   order_minus_one.checked_sub(&order, &one);
 
   // Compute modulo
-  let mut modul = BigNum::new().unwrap();
-  modul.checked_rem(&digestBN, &order_minus_one, &mut ctx);
+  let mut modul = BigNum::new().expect("Error in BN creation");
+  modul.checked_rem(
+    &digestBN.bn(),
+    &order_minus_one,
+    &mut params.ctx().borrow_mut(),
+  );
 
-  // To Curve BN
-  let mut finalBN = BigNum::new().unwrap();
+  // To CurveBN
+  let mut finalBN = BigNum::new().expect("Error in BN creation");
   finalBN.checked_add(&modul, &one);
 
-  finalBN
+  CurveBN::from_BigNum(&finalBN, params)
 }

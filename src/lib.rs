@@ -1,319 +1,135 @@
-#[macro_use]
 extern crate quick_error;
 mod capsule;
+mod curve;
 mod errors;
 mod hash;
 mod keys;
-mod params;
+mod kfrag;
+mod schemes;
+mod utils;
 
-pub use crate::capsule::Capsule;
+pub use crate::capsule::{CFrag, Capsule};
+pub use crate::curve::{CurveBN, CurvePoint, Params};
 pub use crate::errors::PreErrors;
-pub use crate::hash::{_hash_to_curvebn, _unsafe_hash_to_point_g};
-pub use crate::keys::{KeyPair, PublicKey};
-pub use crate::params::Params;
+pub use crate::hash::hash_to_curvebn;
+pub use crate::keys::{KeyPair, Signer};
+pub use crate::kfrag::KFrag;
+pub use crate::schemes::{dem_decrypt, dem_encrypt, kdf, DEM_MIN_SIZE};
+pub use crate::utils::{lambda_coeff, poly_eval};
 
-use openssl::bn::{BigNum, BigNumContext, MsbOption};
-use openssl::ec::{EcGroup, EcKey, EcPoint, EcPointRef, PointConversionForm};
-use openssl::ecdsa::EcdsaSig;
-use openssl::nid::Nid;
-use openssl::pkey::Private;
+use openssl::bn::{BigNum, MsbOption};
 use openssl::sha;
 
-use crypto_api_blake2::{Blake2Error, Blake2b};
-use orion::aead;
-use orion::errors::UnknownCryptoError;
-
-// TODO move out
-static NO_KEY: &[u8; 1] = b"\x00";
-static DELEGATING_ONLY: &[u8; 1] = b"\x01";
-static RECEIVING_ONLY: &[u8; 1] = b"\x02";
-static DELEGATING_AND_RECEIVING: &[u8; 1] = b"\x03";
-
-pub struct KFrag {
-    identifier: BigNum,
-    re_key_share: BigNum,
-    commitment: EcPoint,
-    precursor: EcPoint,
-    signature_for_proxy: EcdsaSig,
-    signature_for_receiver: EcdsaSig,
-    keys_mode_in_signature: [u8; 1],
-    params: Params,
-}
-
-impl KFrag {
-    fn verify(
-        &self,
-        delegating_key: &PublicKey,
-        receiving_key: &PublicKey,
-        verifying_key: &PublicKey,
-    ) -> bool {
-        let mut ctx = BigNumContext::new().unwrap();
-
-        //TODO key.params == params
-
-        let group = &EcGroup::from_curve_name(*self.params.curve_name()).expect("Er");
-
-        // Verify commitment
-        let mut commitment_temp = EcPoint::new(group).unwrap();
-        commitment_temp
-            .mul(group, &self.params.u_point(), &self.re_key_share, &ctx)
-            .unwrap();
-
-        let correct_comm = commitment_temp
-            .eq(group, &self.commitment, &mut ctx)
-            .unwrap();
-
-        // Verify signature
-        if correct_comm {
-            // TODO update mode
-            let mode = DELEGATING_AND_RECEIVING;
-            // SHA256 digest
-            let mut to_hash_it = self.identifier.to_vec();
-            let mut commitment_bytes = self
-                .commitment
-                .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-                .unwrap();
-            to_hash_it.append(&mut commitment_bytes);
-            let mut precursor_bytes = self
-                .precursor
-                .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-                .unwrap();
-            to_hash_it.append(&mut precursor_bytes);
-            to_hash_it.append(&mut mode.to_vec());
-            let mut delegating_pk_bytes = delegating_key
-                .point()
-                .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-                .unwrap();
-            to_hash_it.append(&mut delegating_pk_bytes);
-            let mut receiving_pk_bytes = receiving_key
-                .point()
-                .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-                .unwrap();
-            to_hash_it.append(&mut receiving_pk_bytes);
-            let mut hasher = sha::Sha256::new();
-            hasher.update(&to_hash_it);
-            let kfrag_validity_message_digest = hasher.finish();
-
-            return self
-                .signature_for_proxy
-                .verify(
-                    &kfrag_validity_message_digest,
-                    &EcKey::from_public_key(group, &verifying_key.point()).unwrap(),
-                )
-                .unwrap();
-        } else {
-            return false;
-        }
-
-        true
-    }
-
-    fn verify_for_capsule(&self, capsule: &Capsule) -> bool {
-        self.verify(
-            capsule.delegating_key(),
-            capsule.receiving_key(),
-            capsule.verifying_key(),
-        )
-    }
-}
-
-fn _poly_eval(coeffs: &Vec<BigNum>, x: &BigNum, group: &EcGroup) -> BigNum {
-    let mut ctx = BigNumContext::new().unwrap();
-    let mut order = BigNum::new().unwrap();
-    group.order(&mut order, &mut ctx).unwrap();
-    let mut res = BigNum::new().unwrap();
-    let n = coeffs.len();
-
-    res.checked_add(&BigNum::new().unwrap(), &coeffs[n - 1]);
-
-    for i in 2..(n + 1) {
-        let mut tmp_res = BigNum::new().unwrap();
-        tmp_res.mod_mul(&res, x, &order, &mut ctx);
-        res.mod_add(&tmp_res, &coeffs[n - i], &order, &mut ctx);
-    }
-
-    res
-}
-
-fn _rand_curve_bn(group: &EcGroup) -> BigNum {
-    let mut ctx = BigNumContext::new().unwrap();
-    let mut zero = BigNum::new().unwrap();
-    let mut order = BigNum::new().unwrap();
-    group.order(&mut order, &mut ctx).unwrap();
-
-    let mut rand = BigNum::new().unwrap();
-    // Check validity
-    loop {
-        order.rand_range(&mut rand);
-        if rand > zero && rand < order {
-            break;
-        }
-    }
-
-    rand
-}
-
-fn _encapsulate(from_public_key: &PublicKey, group: &EcGroup) -> (Vec<u8>, Capsule) {
+fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
     // BN context needed for the heap
-    let mut ctx = BigNumContext::new().unwrap();
+    let params = from_public_key.params();
 
     // R point generation
-    let r_key = EcKey::generate(group).unwrap();
-    let mut r_point = EcPoint::new(group).unwrap();
-    r_point
-        .mul_generator(group, r_key.private_key(), &ctx)
-        .unwrap();
-    let mut to_hash = r_point
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
-    let r_pub_key = PublicKey::new(group, &r_point);
-
-    // U point generation
-    let u_key = EcKey::generate(group).unwrap();
-    let mut u_point = EcPoint::new(group).unwrap();
-    u_point
-        .mul_generator(group, u_key.private_key(), &ctx)
-        .unwrap();
-    let mut to_append = u_point
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
-    to_hash.append(&mut to_append);
-    let u_pub_key = PublicKey::new(group, &u_point);
-
-    // Get group order
-    let mut order = BigNum::new().unwrap();
-    group.order(&mut order, &mut ctx).unwrap();
+    let r = KeyPair::new(params);
+    let u = KeyPair::new(params);
 
     // Get sign
-    let h = _hash_to_curvebn(to_hash, group);
-    let mut mul_point = BigNum::new().unwrap();
-    mul_point.mod_mul(&r_key.private_key(), &h, &order, &mut ctx);
-    let mut s = BigNum::new().unwrap();
-    s.mod_add(u_key.private_key(), &mul_point, &order, &mut ctx);
+    let mut to_hash = r.public_key().to_bytes();
+    to_hash.append(&mut u.public_key().to_bytes());
+    let h = hash_to_curvebn(to_hash, params);
 
-    // Base key generation i.e. mul of a BNs sum
-    // Sum R and U points
-    let mut sum = BigNum::new().unwrap();
-    sum.mod_add(r_key.private_key(), u_key.private_key(), &order, &mut ctx);
-    // Multiply previous sum with from_public_key
-    let mut base_key_point = EcPoint::new(group).unwrap();
-    base_key_point
-        .mul(group, &from_public_key.point(), &sum, &ctx)
-        .unwrap();
-    let base_key = base_key_point
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
+    let s = u.private_key() + &(r.private_key() * &h);
 
-    // KDF
-    let mut buf = vec![0; 32];
-    let kdf = Blake2b::kdf();
-    let salt = vec![0; 16]; //TODO
-    let info = vec![0; 16]; //TODO
-    kdf.derive(&mut buf, &base_key, &salt, &info).unwrap();
+    let shared_key = from_public_key * &(r.private_key() + u.private_key());
 
-    (buf, Capsule::new(r_pub_key, u_pub_key, s, group))
+    let encapsulated_key = match kdf(&shared_key.to_bytes()) {
+        Ok(key) => key,
+        Err(err) => return Err(err),
+    };
+
+    Ok((
+        encapsulated_key,
+        Capsule::new(r.public_key(), u.public_key(), &s),
+    ))
 }
 
 pub fn encrypt(
-    from_public_key: &PublicKey,
-    plaintext_b: &[u8],
-    group: &EcGroup,
-) -> (Vec<u8>, Capsule) {
-    let (key, capsule) = _encapsulate(&from_public_key, &group);
+    from_public_key: &CurvePoint,
+    plaintext: &Vec<u8>,
+) -> Result<(Vec<u8>, Capsule), PreErrors> {
+    let (key, capsule) = match _encapsulate(&from_public_key) {
+        Ok(kc) => kc,
+        Err(err) => return Err(err),
+    };
 
-    // DEM
-    // TODO Authenticated data
-    let secret_key = aead::SecretKey::from_slice(&key).unwrap();
-    let ciphertext = aead::seal(&secret_key, plaintext_b).expect("Sync enc error");
-    ////let decrypted_data = aead::open(&secret_key, &ciphertext).expect("Sync dec error");
-
-    (ciphertext, capsule)
+    match dem_encrypt(&key, plaintext) {
+        Ok(ciphertext) => return Ok((ciphertext, capsule)),
+        Err(err) => return Err(err),
+    };
 }
 
 pub fn generate_kfrags(
-    delegating_key: &KeyPair,
-    receiving_pk: &PublicKey,
+    delegating_keypair: &KeyPair,
+    receiving_pk: &CurvePoint,
     threshold: usize,
     n: usize,
-    signer: &KeyPair,
-    group: &EcGroup,
-) -> Vec<KFrag> {
+    signer: &Signer,
+) -> Result<Vec<KFrag>, PreErrors> {
     if threshold <= 0 || threshold > n {
-        println!("Error"); //TODO
+        return Err(PreErrors::InvalidKFragThreshold);
     }
-
-    // TODO check curve
+    if !(delegating_keypair
+        .public_key()
+        .params()
+        .eq(receiving_pk.params()))
+    {
+        return Err(PreErrors::KeysParametersNotEq);
+    }
+    let params = delegating_keypair.public_key().params();
 
     /* The precursor point is used as an ephemeral public key in a DH key exchange,
     and the resulting shared secret 'dh_point' is used to derive other secret values
     */
-    let precursor_key = EcKey::generate(&group).unwrap();
-    let precursor_pk = precursor_key.public_key().to_owned(&group).unwrap();
-    let precursor_sk = precursor_key.private_key().to_owned().unwrap();
+    let precursor = KeyPair::new(params);
+    // Multiply precursor with receiving_pk to obtain DH point
+    let dh_point = receiving_pk * precursor.private_key();
 
-    // Multiply precursor with receiving_pk
-    let mut ctx = BigNumContext::new().unwrap();
-    let mut dh_point = EcPoint::new(group).unwrap();
-    dh_point
-        .mul(group, &receiving_pk.point(), &precursor_sk, &ctx)
-        .unwrap();
-
-    // Prepare for hash
-    let mut dh = dh_point
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
-    let mut to_hash = precursor_pk
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
-    let mut to_append = receiving_pk
-        .point()
-        .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-        .unwrap();
-    to_hash.append(&mut to_append);
-    to_hash.append(&mut dh);
-    let mut to_hash2 = to_hash.clone();
+    let mut to_hash = precursor.public_key().to_bytes();
+    to_hash.append(&mut receiving_pk.to_bytes());
+    to_hash.append(&mut dh_point.to_bytes());
+    let to_hash2 = to_hash.clone();
     //TODO constant hash, constant_sorrow py module
     let constant_string = String::from("NON_INTERACTIVE");
-    let mut constant = constant_string.into_bytes();
-    to_hash.append(&mut constant);
+    to_hash.append(&mut constant_string.into_bytes());
 
     // Secret value 'd' allows to make Umbral non-interactive
-    let d = _hash_to_curvebn(to_hash, group);
+    let d = hash_to_curvebn(to_hash, params);
 
+    /////////////////
     // Secret sharing
-    // Coefficient zero
-    let mut order = BigNum::new().unwrap();
-    group.order(&mut order, &mut ctx).unwrap();
-    let mut d_inverse = BigNum::new().unwrap();
-    d_inverse.mod_inverse(&d, &order, &mut ctx);
-    let mut coef_zero = BigNum::new().unwrap();
-    coef_zero.mod_mul(
-        &delegating_key.private_key().to_owned().unwrap(),
-        &d_inverse,
-        &order,
-        &mut ctx,
-    );
+
     // Coefficients of the generating polynomial
-    let mut coefficients: Vec<BigNum> = Vec::with_capacity(threshold);
+    let mut coefficients: Vec<CurveBN> = Vec::with_capacity(threshold);
+    // Coefficient zero
+    let coef_zero = delegating_keypair.private_key() / &d;
     coefficients.push(coef_zero);
     for _ in 1..threshold {
-        coefficients.push(_rand_curve_bn(group));
+        coefficients.push(CurveBN::rand_curve_bn(params));
     }
 
     // Kfrags generation
     let mut kfrags: Vec<KFrag> = Vec::new();
-    let order_bytes_size = order.num_bits();
+    let order_bytes_size = params.order().num_bits();
     for _ in 0..n {
         let mut kfrag_id = BigNum::new().unwrap();
-        kfrag_id.rand(order_bytes_size, MsbOption::MAYBE_ZERO, false);
-        let mut kfrag_id_bytes = kfrag_id.to_vec();
+        match kfrag_id.rand(order_bytes_size, MsbOption::MAYBE_ZERO, false) {
+            Ok(_) => (),
+            Err(err) => {
+                println!("BigNum random generation error: {:?}", err);
+                return Err(PreErrors::GenericError);
+            }
+        }
+        let kfrag_id = CurveBN::from_BigNum(&kfrag_id, params);
 
-        //TODO constant hash, constant_sorrow py module
-        let constant_string_x = String::from("X_COORDINATE");
-        let mut constant_x = constant_string_x.into_bytes();
         let mut to_hash_it = to_hash2.clone();
-        to_hash_it.append(&mut constant_x);
-        to_hash_it.append(&mut kfrag_id_bytes);
+        let constant_string_x = String::from("X_COORDINATE"); //TODO constant hash, constant_sorrow py module
+        to_hash_it.append(&mut constant_string_x.into_bytes());
+        to_hash_it.append(&mut kfrag_id.to_bytes());
 
         /*
             The index of the re-encryption key share (which in Shamir's Secret
@@ -321,200 +137,276 @@ pub fn generate_kfrags(
             generating polynomial), is used to prevent reconstruction of the
             re-encryption key without Bob's intervention
         */
-        let share_index = _hash_to_curvebn(to_hash_it, group);
+        let share_index = hash_to_curvebn(to_hash_it, params);
 
         /*
             The re-encryption key share is the result of evaluating the generating
             polynomial for the index value
         */
-        let rk = _poly_eval(&coefficients, &share_index, &group);
+        let rk = poly_eval(&coefficients, &share_index);
 
-        // TODO move outside
-        let u = _unsafe_hash_to_point_g(group);
-        let mut commitment_point = EcPoint::new(group).unwrap();
-        commitment_point.mul(group, &u, &rk, &ctx).unwrap();
+        let u = CurvePoint::from_EcPoint(params.u_point(), params);
+        let commitment_point = &u * &rk;
 
         // Signing
-        // SHA256 digest
-        let mut to_hash_it2 = kfrag_id.to_vec();
-        let mut delegating_pk_bytes = delegating_key
-            .public_key()
-            .to_owned(&group)
-            .unwrap()
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it2.append(&mut delegating_pk_bytes);
-        let mut receiving_pk_bytes = receiving_pk
-            .point()
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it2.append(&mut receiving_pk_bytes);
-        let mut commitment_bytes = commitment_point
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it2.append(&mut commitment_bytes);
-        let mut precursor_bytes = precursor_pk
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it2.append(&mut precursor_bytes);
+        let mut to_hash_it2 = kfrag_id.to_bytes();
+        to_hash_it2.append(&mut delegating_keypair.public_key().to_bytes());
+        to_hash_it2.append(&mut receiving_pk.to_bytes());
+        to_hash_it2.append(&mut commitment_point.to_bytes());
+        to_hash_it2.append(&mut precursor.public_key().to_bytes());
         let mut hasher = sha::Sha256::new();
         hasher.update(&to_hash_it2);
         let validity_message_for_receiver_digest = hasher.finish();
-        let signature_for_receiver =
-            EcdsaSig::sign(&validity_message_for_receiver_digest, signer).unwrap();
+        let signature_for_receiver = signer.sign(&validity_message_for_receiver_digest.to_vec());
 
         // TODO update mode
-        let mut mode = DELEGATING_AND_RECEIVING;
+        let mode = kfrag::DELEGATING_AND_RECEIVING;
         // SHA256 digest
-        let mut to_hash_it3 = kfrag_id.to_vec();
-        let mut commitment_bytes = commitment_point
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it3.append(&mut commitment_bytes);
-        let mut precursor_bytes = precursor_pk
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it3.append(&mut precursor_bytes);
+        let mut to_hash_it3 = kfrag_id.to_bytes();
+        to_hash_it3.append(&mut commitment_point.to_bytes());
+        to_hash_it3.append(&mut precursor.public_key().to_bytes());
         to_hash_it3.append(&mut mode.to_vec());
-        let mut delegating_pk_bytes = delegating_key
-            .public_key()
-            .to_owned(&group)
-            .unwrap()
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it3.append(&mut delegating_pk_bytes);
-        let mut receiving_pk_bytes = receiving_pk
-            .point()
-            .to_bytes(group, PointConversionForm::COMPRESSED, &mut ctx)
-            .unwrap();
-        to_hash_it3.append(&mut receiving_pk_bytes);
+        to_hash_it3.append(&mut delegating_keypair.public_key().to_bytes());
+        to_hash_it3.append(&mut receiving_pk.to_bytes());
         let mut hasher = sha::Sha256::new();
         hasher.update(&to_hash_it3);
         let validity_message_for_proxy_digest = hasher.finish();
-        let signature_for_proxy =
-            EcdsaSig::sign(&validity_message_for_proxy_digest, signer).unwrap();
+        let signature_for_proxy = signer.sign(&validity_message_for_proxy_digest.to_vec());
 
-        let precursor_pk_it = precursor_pk.to_owned(group).unwrap();
-        kfrags.push(KFrag {
-            identifier: kfrag_id,
-            re_key_share: rk,
-            commitment: commitment_point,
-            precursor: precursor_pk_it,
-            signature_for_proxy: signature_for_proxy,
-            signature_for_receiver: signature_for_receiver,
-            keys_mode_in_signature: mode.clone(),
-            params: Params::new(group),
-        });
+        kfrags.push(KFrag::new(
+            &kfrag_id,
+            &rk,
+            &commitment_point,
+            &precursor.public_key(),
+            &signature_for_proxy,
+            &signature_for_receiver,
+            &mode,
+        ));
     }
 
-    kfrags
+    Ok(kfrags)
 }
 
-pub fn reencrypt(kfrag: &KFrag, capsule: &Capsule, group: &EcGroup) -> Result<bool, PreErrors> {
-    // TODO split
-    if !capsule.verify(group) {
-        if !kfrag.verify_for_capsule(capsule) {
-            println!("WEeeeeee");
-            Ok(true)?;
-        } else {
-            println!("WEeeeeee2");
-            Err(PreErrors::InvalidKFrag)?;
-        }
-        println!("WEeeeeee3");
-        Ok(true)
+pub fn reencrypt(
+    kfrag: &KFrag,
+    capsule: &Capsule,
+    provide_proof: bool,
+    verify_kfrag: bool,
+) -> Result<CFrag, PreErrors> {
+    if !capsule.verify() {
+        return Err(PreErrors::InvalidCapsule);
     } else {
-        println!("WEeeeeee4");
-        Err(PreErrors::InvalidCapsule)
+        if verify_kfrag && !kfrag.verify_for_capsule(capsule) {
+            return Err(PreErrors::InvalidKFrag);
+        } else {
+            let rk = kfrag.re_key_share();
+            let e_i = capsule.e() * rk;
+            let v_i = capsule.v() * rk;
+
+            let mut cfrag = CFrag::new(&e_i, &v_i, kfrag.id(), kfrag.precursor());
+
+            if provide_proof {
+                match cfrag.prove_correctness(capsule, kfrag) {
+                    Ok(_) => (),
+                    Err(err) => return Err(err),
+                }
+            }
+
+            return Ok(cfrag);
+        }
+    }
+}
+
+fn _decapsulate(capsule: &Capsule, receiving: &CurveBN) -> Result<Vec<u8>, PreErrors> {
+    if !capsule.verify() {
+        return Err(PreErrors::InvalidCapsule);
+    } else {
+        let shared_key = &(capsule.e() + capsule.v()) * receiving;
+        kdf(&shared_key.to_bytes())
+    }
+}
+
+fn _decapsulate_reencrypted(
+    capsule: &Capsule,
+    receiver_keypair: &KeyPair,
+) -> Result<Vec<u8>, PreErrors> {
+    let params = capsule.e().params();
+
+    let pk = receiver_keypair.public_key();
+    let sk = receiver_keypair.private_key();
+
+    let precursor = capsule.attached_cfrags()[0].precursor();
+    let dh_point = precursor * sk;
+
+    // Combination of CFrags via Shamir's Secret Sharing reconstruction
+    let mut xs: Vec<CurveBN> = Vec::new();
+    for cfrag in capsule.attached_cfrags() {
+        let mut to_hash = precursor.to_bytes();
+        to_hash.append(&mut pk.to_bytes());
+        to_hash.append(&mut dh_point.to_bytes());
+        to_hash.append(&mut String::from("X_COORDINATE").into_bytes());
+        to_hash.append(&mut cfrag.kfrag_id().to_bytes());
+
+        xs.push(hash_to_curvebn(to_hash, params));
+    }
+
+    let mut e_summands: Vec<CurvePoint> = Vec::new();
+    let mut v_summands: Vec<CurvePoint> = Vec::new();
+    for i in 0..xs.len() {
+        let cfrag = &capsule.attached_cfrags()[i];
+        let x = &xs[i];
+        if !cfrag.precursor().eq(&precursor) {
+            return Err(PreErrors::InvalidCFrag);
+        }
+        let lambda_i = lambda_coeff(x, &xs);
+        e_summands.push(cfrag.e_i_point() * &lambda_i);
+        v_summands.push(cfrag.v_i_point() * &lambda_i);
+    }
+
+    let mut e_prime = e_summands[0].to_owned();
+    let mut v_prime = v_summands[0].to_owned();
+    for i in 1..e_summands.len() {
+        e_prime = &e_prime + &e_summands[i];
+        v_prime = &v_prime + &v_summands[i];
+    }
+
+    // Secret value 'd' allows to make Umbral non-interactive
+    let mut to_hash = precursor.to_bytes();
+    to_hash.append(&mut pk.to_bytes());
+    to_hash.append(&mut dh_point.to_bytes());
+    to_hash.append(&mut String::from("NON_INTERACTIVE").into_bytes());
+    let d = hash_to_curvebn(to_hash, params);
+
+    let (e, v, s) = (capsule.e(), capsule.v(), capsule.sign());
+    let mut to_hash2 = e.to_bytes();
+    to_hash2.append(&mut v.to_bytes());
+    let h = hash_to_curvebn(to_hash2, params);
+
+    let orig_pk = capsule.delegating_key();
+
+    let first = orig_pk * &(s / &d);
+    let second = &(&e_prime * &h) + &v_prime;
+    if !first.eq(&second) {
+        return Err(PreErrors::GenericError);
+    }
+
+    let shared_key = &(&e_prime + &v_prime) * &d;
+
+    kdf(&shared_key.to_bytes())
+}
+
+fn _open_capsule(
+    capsule: &Capsule,
+    receiver_keypair: &KeyPair,
+    check_proof: bool,
+) -> Result<Vec<u8>, PreErrors> {
+    if !capsule.verify() {
+        return Err(PreErrors::InvalidCapsule);
+    } else {
+        if check_proof {
+            let mut offending = false;
+            for cfrag in capsule.attached_cfrags() {
+                match cfrag.verify_correctness(capsule) {
+                    Ok(correct) => offending = offending && correct,
+                    Err(err) => return Err(err),
+                }
+            }
+            if offending {
+                return Err(PreErrors::InvalidCFrag);
+            }
+        }
+
+        _decapsulate_reencrypted(&capsule, &receiver_keypair)
+    }
+}
+
+pub fn decrypt(
+    ciphertext: Vec<u8>,
+    capsule: &Capsule,
+    receiver_keypair: &KeyPair,
+    check_proof: bool,
+) -> Result<Vec<u8>, PreErrors> {
+    if ciphertext.len() < DEM_MIN_SIZE {
+        return Err(PreErrors::CiphertextError);
+    }
+
+    let encapsulated_key = match !capsule.attached_cfrags().is_empty() {
+        //Since there are cfrags attached, we assume this is the receiver opening the Capsule.
+        //(i.e., this is a re-encrypted capsule)
+        true => _open_capsule(capsule, receiver_keypair, check_proof),
+        //Since there aren't cfrags attached, we assume this is Alice opening the Capsule.
+        //(i.e., this is an original capsule)
+        false => _decapsulate(capsule, receiver_keypair.private_key()),
+    };
+
+    match encapsulated_key {
+        Err(err) => return Err(err),
+        Ok(key) => {
+            return dem_decrypt(&key, &ciphertext);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::PreErrors;
-    use openssl::ec::{EcGroup, EcKey, EcPoint};
+    use crate::curve::CurveBN;
+    use crate::utils::poly_eval;
+    use openssl::nid::Nid;
+    use std::rc::Rc;
 
     #[test]
     fn encrypt_simple() {
-        let (group, alice, signer, bob_pk) = _generate_credentials();
-
-        let carl = KeyPair::new(&group);
-        let carl_pk = carl.public_key();
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, _, _) = _generate_credentials(&params);
 
         // encrypt
-        let plaintext = String::from("Hello, umbral!");
-        let (cipher, mut capsule) = encrypt(&alice.public_key(), plaintext.as_bytes(), &group);
-        println!("{:?}", cipher);
-        //assert_eq!(2 + 2, 4);
+        let plaintext = b"Hello, umbral!".to_vec();
+        encrypt(&alice.public_key(), &plaintext);
     }
 
     #[test]
-    fn poly_eval() {
-        let group = EcGroup::from_curve_name(Nid::SECP256K1).expect("Er");
-        let mut coefficients: Vec<BigNum> = Vec::with_capacity(5);
+    fn poly_eval_test() {
+        let params = Rc::new(Params::new(Nid::SECP256K1));
+        let mut coefficients: Vec<CurveBN> = Vec::with_capacity(5);
         for i in 0..5 {
-            coefficients.push(BigNum::from_u32(i + 2).unwrap());
+            coefficients.push(CurveBN::from_u32(i + 2, &params));
         }
-        let x = BigNum::from_u32(2).unwrap();
+        let x = CurveBN::from_u32(2, &params);
 
-        let res = _poly_eval(&coefficients, &x, &group);
-        assert_eq!(res, BigNum::from_u32(160).unwrap());
+        let res = poly_eval(&coefficients, &x);
+        let fin = res.eq(&CurveBN::from_u32(160, &params));
+        assert_eq!(fin, true);
     }
 
     #[test]
     fn kfrags() {
-        let (group, alice, signer, bob_pk) = _generate_credentials();
-
-        let carl = KeyPair::new(&group);
-        let carl_pk = carl.public_key();
-
-        // encrypt
-        let plaintext = String::from("Hello, umbral!");
-        let (cipher, mut capsule) = encrypt(&alice.public_key(), plaintext.as_bytes(), &group);
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, signer, bob) = _generate_credentials(&params);
 
         // keyfrags
-        let kfrags = generate_kfrags(&alice, &carl_pk, 2, 5, &signer, &group);
-        //println!("{:?}", kfrags);
-    }
-
-    #[test]
-    fn false_verify_calsule() {
-        let (group, alice, signer, bob_pk) = _generate_credentials();
-
-        let carl = KeyPair::new(&group);
-        let carl_pk = carl.public_key();
-
-        // encrypt
-        let plaintext = String::from("Hello, umbral!");
-        let (cipher, mut capsule) = encrypt(&alice.public_key(), plaintext.as_bytes(), &group);
-
-        // keyfrags
-        let kfrags = generate_kfrags(&alice, &carl_pk, 2, 5, &signer, &group);
-
-        //set correctness keys
-        capsule.set_correctness_keys(&alice.public_key(), &bob_pk, &signer.public_key(), &group);
-
-        //reencrypt
-        let r = reencrypt(&kfrags[0], &capsule, &group);
-        assert_eq!(PreErrors::InvalidCapsule, r.unwrap_err());
+        generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer);
     }
 
     #[test]
     fn false_verify_kfrag() {
-        let (group, alice, signer, bob_pk) = _generate_credentials();
-
-        let carl = KeyPair::new(&group);
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, signer, bob) = _generate_credentials(&params);
+        let carl = KeyPair::new(&params);
         let carl_pk = carl.public_key();
 
         // encrypt
-        let plaintext = String::from("Hello, umbral!");
-        let (cipher, mut capsule) = encrypt(&alice.public_key(), plaintext.as_bytes(), &group);
-
-        // keyfrags
-        let kfrags = generate_kfrags(&alice, &bob_pk, 2, 5, &signer, &group);
+        let plaintext = b"Hello, umbral!".to_vec();
+        let (_, mut capsule) = match encrypt(&alice.public_key(), &plaintext) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
 
         //set correctness keys
-        capsule.set_correctness_keys(&alice.public_key(), &carl_pk, &signer.public_key(), &group);
+        capsule.set_correctness_keys(&alice.public_key(), &carl_pk, &signer.public_key());
+
+        // keyfrags
+        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
 
         let mut res = false;
         for kfrag in kfrags {
@@ -526,30 +418,122 @@ mod tests {
 
     #[test]
     fn reencrypt_simple() {
-        let (group, alice, signer, bob_pk) = _generate_credentials();
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, signer, bob) = _generate_credentials(&params);
 
-        let plaintext = String::from("Hello, umbral!");
-
-        let (cipher, mut capsule) = encrypt(&alice.public_key(), plaintext.as_bytes(), &group);
-
-        let kfrags = generate_kfrags(&alice, &bob_pk, 2, 5, &signer, &group);
-
+        let plaintext = b"Hello, umbral!".to_vec();
+        let (_, mut capsule) = match encrypt(&alice.public_key(), &plaintext) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
         //set correctness keys
-        capsule.set_correctness_keys(&alice.public_key(), &bob_pk, &signer.public_key(), &group);
+        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
+
+        //kfrags
+        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
 
         //reencrypt
-        let r = reencrypt(&kfrags[0], &capsule, &group);
+        let r = reencrypt(&kfrags[0], &capsule, true, true);
         assert_eq!(r.is_ok(), true);
     }
 
-    fn _generate_credentials() -> (EcGroup, KeyPair, KeyPair, PublicKey) {
-        let group = EcGroup::from_curve_name(Nid::SECP256K1).expect("Er");
+    #[test]
+    fn attach_cfrag() {
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, signer, bob) = _generate_credentials(&params);
 
-        let alice = KeyPair::new(&group);
-        let signer = KeyPair::new(&group);
+        let plaintext = b"Hello, umbral!".to_vec();
+        let (_, mut capsule) = match encrypt(&alice.public_key(), &plaintext) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
+        //set correctness keys
+        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
 
-        let bob = KeyPair::new(&group);
+        //kfrags
+        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
 
-        (group, alice, signer, *bob.public_key())
+        let mut res = true;
+        for kfrag in kfrags {
+            //reencrypt
+            let cfrag = reencrypt(&kfrag, &capsule, true, true);
+            //attach cfrag
+            res = res && capsule.attach_cfrag(&cfrag.unwrap()).is_ok();
+        }
+        assert_eq!(res, true);
+    }
+
+    #[test]
+    fn decrypt_frags() {
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, signer, bob) = _generate_credentials(&params);
+
+        let plaintext = b"Hello, umbral!".to_vec();
+        let (ciphertext, mut capsule) = match encrypt(&alice.public_key(), &plaintext) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
+
+        //set correctness keys
+        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
+
+        //kfrags
+        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
+
+        for kfrag in kfrags {
+            //reencrypt
+            let cfrag = reencrypt(&kfrag, &capsule, true, true);
+            //attach cfrag
+            capsule.attach_cfrag(&cfrag.unwrap());
+        }
+
+        let res = decrypt(ciphertext, &capsule, &bob, true);
+        let plaintext_bob = res.expect("Error in Decryption");
+        println!("{:?}", String::from_utf8(plaintext_bob.to_owned()).unwrap());
+        assert_eq!(plaintext, plaintext_bob);
+    }
+
+    #[test]
+    fn decrypt_simple() {
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let (alice, _, _) = _generate_credentials(&params);
+
+        let plaintext = b"Hello, umbral!".to_vec();
+        let (ciphertext, capsule) = match encrypt(&alice.public_key(), &plaintext) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
+
+        let res = decrypt(ciphertext, &capsule, &alice, true);
+        let plaintext_dec = res.expect("Error in Decryption");
+        println!("{:?}", String::from_utf8(plaintext_dec.to_owned()).unwrap());
+        assert_eq!(plaintext, plaintext_dec);
+    }
+
+    #[test]
+    fn curve_bn() {
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let one = &CurveBN::from_u32(1, &params);
+        let two = &CurveBN::from_u32(2, &params);
+        let ten = &CurveBN::from_u32(10, &params);
+        let three = one + two;
+        assert_eq!(three.bn().to_vec(), vec![3; 1]);
+
+        let nine = ten - one;
+        assert_eq!(nine.bn().to_vec(), vec![9; 1]);
+
+        let three_again = &nine / &three;
+        assert_eq!(three_again.bn().to_vec(), vec![3; 1]);
+
+        let eighteen = &nine * two;
+        assert_eq!(eighteen.bn().to_vec(), vec![18; 1]);
+    }
+
+    fn _generate_credentials(params: &Rc<Params>) -> (KeyPair, Signer, KeyPair) {
+        let alice = KeyPair::new(params);
+        let signer = Signer::new(params);
+        let bob = KeyPair::new(params);
+
+        (alice, signer, bob)
     }
 }
