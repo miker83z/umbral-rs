@@ -1,9 +1,8 @@
-pub use crate::capsule::Capsule;
-pub use crate::curve::{CurveBN, CurvePoint, Params};
-pub use crate::errors::PreErrors;
-pub use crate::keys::{KeyPair, Signature, Signer};
-
-use openssl::sha;
+use crate::capsule::Capsule;
+use crate::curve::{CurveBN, CurvePoint, Params};
+use crate::errors::PreErrors;
+use crate::keys::{KeyPair, Signature, Signer};
+use crate::schemes::SHA256Hash;
 
 // TODO ?
 pub static NO_KEY: &[u8; 1] = b"\x00";
@@ -69,13 +68,10 @@ impl KFrag {
       to_hash.append(&mut mode.to_vec());
       to_hash.append(&mut delegating_key.to_bytes());
       to_hash.append(&mut receiving_key.to_bytes());
-      let mut hasher = sha::Sha256::new();
-      hasher.update(&to_hash);
-      let kfrag_validity_message_digest = hasher.finish();
 
       return self
         .signature_for_proxy
-        .verify(&kfrag_validity_message_digest.to_vec(), verifying_key);
+        .verify::<SHA256Hash>(&to_hash, verifying_key);
     }
   }
 

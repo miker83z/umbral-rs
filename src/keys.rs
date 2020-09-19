@@ -1,4 +1,5 @@
 pub use crate::curve::{CurveBN, CurvePoint, Params};
+pub use crate::schemes::Hash;
 
 use std::rc::Rc;
 
@@ -51,12 +52,18 @@ impl Signature {
     }
   }
 
-  pub fn verify(&self, data: &Vec<u8>, verifying_pk: &CurvePoint) -> bool {
+  pub fn verify<H>(&self, data: &Vec<u8>, verifying_pk: &CurvePoint) -> bool
+  where
+    H: Hash,
+  {
+    let mut hash = H::new(&b"".to_vec());
+    hash.update(data);
+    let digest = &hash.finalize();
     let ver_key = EcKey::from_public_key(verifying_pk.params().group(), verifying_pk.point())
       .expect("Error in Key creation");
     self
       .s
-      .verify(data, &ver_key)
+      .verify(digest, &ver_key)
       .expect("Error in Signature verification")
   }
 }
@@ -78,8 +85,14 @@ impl Signer {
     }
   }
 
-  pub fn sign(&self, data: &Vec<u8>) -> Signature {
-    Signature::from_EcdsaSig(&EcdsaSig::sign(data, &self.key).expect("Error in Signer signature"))
+  pub fn sign<H>(&self, data: &Vec<u8>) -> Signature
+  where
+    H: Hash,
+  {
+    let mut hash = H::new(&b"".to_vec());
+    hash.update(data);
+    let digest = &hash.finalize();
+    Signature::from_EcdsaSig(&EcdsaSig::sign(digest, &self.key).expect("Error in Signer signature"))
   }
 
   pub fn public_key(&self) -> &CurvePoint {

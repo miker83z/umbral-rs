@@ -1,13 +1,8 @@
-pub use crate::curve::{CurveBN, CurvePoint, Params};
-pub use crate::errors::PreErrors;
-pub use crate::hash::hash_to_curvebn;
-pub use crate::keys::{KeyPair, Signature};
-pub use crate::kfrag::KFrag;
-
-use std::rc::Rc;
-
-use openssl::bn::BigNumContext;
-use openssl::sha;
+use crate::curve::{CurveBN, CurvePoint};
+use crate::errors::PreErrors;
+use crate::keys::Signature;
+use crate::kfrag::KFrag;
+use crate::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
 
 pub struct Capsule {
   e_point: CurvePoint,
@@ -77,7 +72,7 @@ impl Capsule {
 
     let mut to_hash = e.to_bytes();
     to_hash.append(&mut v.to_bytes());
-    let h = hash_to_curvebn(to_hash, params);
+    let h = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
 
     let first = CurvePoint::mul_gen(&self.sign, params);
 
@@ -184,8 +179,6 @@ impl CFrag {
   }
 
   pub fn prove_correctness(&mut self, capsule: &Capsule, kfrag: &KFrag) -> Result<(), PreErrors> {
-    let mut ctx = BigNumContext::new().unwrap();
-
     if !capsule.verify() {
       return Err(PreErrors::InvalidCapsule);
     } else {
@@ -203,9 +196,9 @@ impl CFrag {
       let u = &CurvePoint::from_EcPoint(params.u_point(), params);
       let u_1 = kfrag.commitment();
 
-      let mut e_2 = e * &t;
-      let mut v_2 = v * &t;
-      let mut u_2 = u * &t;
+      let e_2 = e * &t;
+      let v_2 = v * &t;
+      let u_2 = u * &t;
 
       let mut to_hash = e.to_bytes();
       to_hash.append(&mut e_1.to_bytes());
@@ -217,8 +210,7 @@ impl CFrag {
       to_hash.append(&mut u_1.to_bytes());
       to_hash.append(&mut u_2.to_bytes());
 
-      //TODO ExtendedKeccak
-      let h = hash_to_curvebn(to_hash, params);
+      let h = hash_to_curvebn::<ExtendedKeccak>(&to_hash, params, None);
 
       let z_3 = &t + &(&h * rk);
 
@@ -268,8 +260,7 @@ impl CFrag {
         to_hash.append(&mut u_1.to_bytes());
         to_hash.append(&mut u_2.to_bytes());
         //TODO check metadata
-        //TODO ExtendedKeccak
-        let h = hash_to_curvebn(to_hash, params);
+        let h = hash_to_curvebn::<ExtendedKeccak>(&to_hash, params, None);
 
         let precursor = &self.precursor;
         let kfrag_id = &self.kfrag_id;
@@ -279,14 +270,11 @@ impl CFrag {
         to_hash2.append(&mut receiving_pk.to_bytes());
         to_hash2.append(&mut u_1.to_bytes());
         to_hash2.append(&mut precursor.to_bytes());
-        let mut hasher = sha::Sha256::new();
-        hasher.update(&to_hash2);
-        let validity_message_for_receiver_digest = hasher.finish();
 
         // First checking
         if !proof
           .kfrag_signature
-          .verify(&validity_message_for_receiver_digest.to_vec(), verifying_pk)
+          .verify::<SHA256Hash>(&to_hash2, verifying_pk)
         {
           return Ok(false);
         }

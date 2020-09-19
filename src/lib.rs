@@ -2,7 +2,6 @@ extern crate quick_error;
 mod capsule;
 mod curve;
 mod errors;
-mod hash;
 mod keys;
 mod kfrag;
 mod schemes;
@@ -11,14 +10,14 @@ mod utils;
 pub use crate::capsule::{CFrag, Capsule};
 pub use crate::curve::{CurveBN, CurvePoint, Params};
 pub use crate::errors::PreErrors;
-pub use crate::hash::hash_to_curvebn;
 pub use crate::keys::{KeyPair, Signer};
 pub use crate::kfrag::KFrag;
-pub use crate::schemes::{dem_decrypt, dem_encrypt, kdf, DEM_MIN_SIZE};
+pub use crate::schemes::{
+    dem_decrypt, dem_encrypt, hash_to_curvebn, kdf, Blake2bHash, SHA256Hash, DEM_MIN_SIZE,
+};
 pub use crate::utils::{lambda_coeff, poly_eval};
 
 use openssl::bn::{BigNum, MsbOption};
-use openssl::sha;
 
 fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
     // BN context needed for the heap
@@ -31,7 +30,7 @@ fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreE
     // Get sign
     let mut to_hash = r.public_key().to_bytes();
     to_hash.append(&mut u.public_key().to_bytes());
-    let h = hash_to_curvebn(to_hash, params);
+    let h = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
 
     let s = u.private_key() + &(r.private_key() * &h);
 
@@ -98,7 +97,7 @@ pub fn generate_kfrags(
     to_hash.append(&mut constant_string.into_bytes());
 
     // Secret value 'd' allows to make Umbral non-interactive
-    let d = hash_to_curvebn(to_hash, params);
+    let d = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
 
     /////////////////
     // Secret sharing
@@ -137,7 +136,7 @@ pub fn generate_kfrags(
             generating polynomial), is used to prevent reconstruction of the
             re-encryption key without Bob's intervention
         */
-        let share_index = hash_to_curvebn(to_hash_it, params);
+        let share_index = hash_to_curvebn::<Blake2bHash>(&to_hash_it, params, None);
 
         /*
             The re-encryption key share is the result of evaluating the generating
@@ -154,10 +153,7 @@ pub fn generate_kfrags(
         to_hash_it2.append(&mut receiving_pk.to_bytes());
         to_hash_it2.append(&mut commitment_point.to_bytes());
         to_hash_it2.append(&mut precursor.public_key().to_bytes());
-        let mut hasher = sha::Sha256::new();
-        hasher.update(&to_hash_it2);
-        let validity_message_for_receiver_digest = hasher.finish();
-        let signature_for_receiver = signer.sign(&validity_message_for_receiver_digest.to_vec());
+        let signature_for_receiver = signer.sign::<SHA256Hash>(&to_hash_it2);
 
         // TODO update mode
         let mode = kfrag::DELEGATING_AND_RECEIVING;
@@ -168,10 +164,7 @@ pub fn generate_kfrags(
         to_hash_it3.append(&mut mode.to_vec());
         to_hash_it3.append(&mut delegating_keypair.public_key().to_bytes());
         to_hash_it3.append(&mut receiving_pk.to_bytes());
-        let mut hasher = sha::Sha256::new();
-        hasher.update(&to_hash_it3);
-        let validity_message_for_proxy_digest = hasher.finish();
-        let signature_for_proxy = signer.sign(&validity_message_for_proxy_digest.to_vec());
+        let signature_for_proxy = signer.sign::<SHA256Hash>(&to_hash_it3);
 
         kfrags.push(KFrag::new(
             &kfrag_id,
@@ -247,7 +240,7 @@ fn _decapsulate_reencrypted(
         to_hash.append(&mut String::from("X_COORDINATE").into_bytes());
         to_hash.append(&mut cfrag.kfrag_id().to_bytes());
 
-        xs.push(hash_to_curvebn(to_hash, params));
+        xs.push(hash_to_curvebn::<Blake2bHash>(&to_hash, params, None));
     }
 
     let mut e_summands: Vec<CurvePoint> = Vec::new();
@@ -275,12 +268,12 @@ fn _decapsulate_reencrypted(
     to_hash.append(&mut pk.to_bytes());
     to_hash.append(&mut dh_point.to_bytes());
     to_hash.append(&mut String::from("NON_INTERACTIVE").into_bytes());
-    let d = hash_to_curvebn(to_hash, params);
+    let d = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
 
     let (e, v, s) = (capsule.e(), capsule.v(), capsule.sign());
     let mut to_hash2 = e.to_bytes();
     to_hash2.append(&mut v.to_bytes());
-    let h = hash_to_curvebn(to_hash2, params);
+    let h = hash_to_curvebn::<Blake2bHash>(&to_hash2, params, None);
 
     let orig_pk = capsule.delegating_key();
 
@@ -508,6 +501,14 @@ mod tests {
         let plaintext_dec = res.expect("Error in Decryption");
         println!("{:?}", String::from_utf8(plaintext_dec.to_owned()).unwrap());
         assert_eq!(plaintext, plaintext_dec);
+    }
+
+    #[test]
+    fn hash_to_bn() {
+        let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
+        let kl = hash_to_curvebn::<Blake2bHash>(&b"gadhj".to_vec(), &params, None);
+
+        println!("{:?}", kl.bn());
     }
 
     #[test]

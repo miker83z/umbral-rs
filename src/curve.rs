@@ -1,4 +1,4 @@
-use crate::hash::unsafe_hash_to_point;
+use crate::schemes::{unsafe_hash_to_point, Blake2bHash};
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -19,15 +19,24 @@ impl Params {
   pub fn new(curve_name: Nid) -> Self {
     let mut ctx = BigNumContext::new().unwrap();
     let group = EcGroup::from_curve_name(curve_name).expect("Curve name error");
-    let gen = group.generator().to_owned(&group).unwrap();
+    let g_point = group.generator().to_owned(&group).unwrap();
     let mut order = BigNum::new().unwrap();
     group.order(&mut order, &mut ctx).unwrap();
-    let u = unsafe_hash_to_point(&group);
+    let u_point = unsafe_hash_to_point::<Blake2bHash>(
+      Some(
+        &g_point
+          .to_bytes(&group, PointConversionForm::COMPRESSED, &mut ctx)
+          .expect("Error in Generator conversion"),
+      ),
+      Some(&b"NuCypher/UmbralParameters/u".to_vec()),
+      &group,
+      &mut ctx,
+    );
     Params {
-      group: group,
-      g_point: gen,
-      order: order,
-      u_point: u,
+      group,
+      g_point,
+      order,
+      u_point,
       ctx: Rc::new(RefCell::new(ctx)),
     }
   }
