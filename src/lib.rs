@@ -11,41 +11,11 @@ pub use crate::capsule::{CFrag, Capsule};
 pub use crate::curve::{CurveBN, CurvePoint, Params};
 pub use crate::errors::PreErrors;
 pub use crate::keys::{KeyPair, Signer};
-pub use crate::kfrag::KFrag;
-pub use crate::schemes::{
-    dem_decrypt, dem_encrypt, hash_to_curvebn, kdf, Blake2bHash, SHA256Hash, DEM_MIN_SIZE,
-};
-pub use crate::utils::{lambda_coeff, poly_eval};
+pub use crate::kfrag::{KFrag, KFragMode};
+pub use crate::schemes::{dem_decrypt, dem_encrypt, hash_to_curve_blake, kdf, DEM_MIN_SIZE};
+pub use crate::utils::{lambda_coeff, new_constant_sorrow, poly_eval};
 
 use openssl::bn::{BigNum, MsbOption};
-
-fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
-    // BN context needed for the heap
-    let params = from_public_key.params();
-
-    // R point generation
-    let r = KeyPair::new(params);
-    let u = KeyPair::new(params);
-
-    // Get sign
-    let mut to_hash = r.public_key().to_bytes();
-    to_hash.append(&mut u.public_key().to_bytes());
-    let h = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
-
-    let s = u.private_key() + &(r.private_key() * &h);
-
-    let shared_key = from_public_key * &(r.private_key() + u.private_key());
-
-    let encapsulated_key = match kdf(&shared_key.to_bytes()) {
-        Ok(key) => key,
-        Err(err) => return Err(err),
-    };
-
-    Ok((
-        encapsulated_key,
-        Capsule::new(r.public_key(), u.public_key(), &s),
-    ))
-}
 
 pub fn encrypt(
     from_public_key: &CurvePoint,
@@ -56,7 +26,7 @@ pub fn encrypt(
         Err(err) => return Err(err),
     };
 
-    match dem_encrypt(&key, plaintext) {
+    match dem_encrypt(&key, plaintext, Some(&capsule.to_bytes())) {
         Ok(ciphertext) => return Ok((ciphertext, capsule)),
         Err(err) => return Err(err),
     };
@@ -68,6 +38,7 @@ pub fn generate_kfrags(
     threshold: usize,
     n: usize,
     signer: &Signer,
+    mode: KFragMode,
 ) -> Result<Vec<KFrag>, PreErrors> {
     if threshold <= 0 || threshold > n {
         return Err(PreErrors::InvalidKFragThreshold);
@@ -79,6 +50,7 @@ pub fn generate_kfrags(
     {
         return Err(PreErrors::KeysParametersNotEq);
     }
+
     let params = delegating_keypair.public_key().params();
 
     /* The precursor point is used as an ephemeral public key in a DH key exchange,
@@ -93,11 +65,10 @@ pub fn generate_kfrags(
     to_hash.append(&mut dh_point.to_bytes());
     let to_hash2 = to_hash.clone();
     //TODO constant hash, constant_sorrow py module
-    let constant_string = String::from("NON_INTERACTIVE");
-    to_hash.append(&mut constant_string.into_bytes());
+    to_hash.append(&mut new_constant_sorrow("NON_INTERACTIVE"));
 
     // Secret value 'd' allows to make Umbral non-interactive
-    let d = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
+    let d = hash_to_curve_blake(&to_hash, params);
 
     /////////////////
     // Secret sharing
@@ -118,17 +89,14 @@ pub fn generate_kfrags(
         let mut kfrag_id = BigNum::new().unwrap();
         match kfrag_id.rand(order_bytes_size, MsbOption::MAYBE_ZERO, false) {
             Ok(_) => (),
-            Err(err) => {
-                println!("BigNum random generation error: {:?}", err);
+            Err(_) => {
                 return Err(PreErrors::GenericError);
             }
         }
-        let kfrag_id = CurveBN::from_BigNum(&kfrag_id, params);
 
         let mut to_hash_it = to_hash2.clone();
-        let constant_string_x = String::from("X_COORDINATE"); //TODO constant hash, constant_sorrow py module
-        to_hash_it.append(&mut constant_string_x.into_bytes());
-        to_hash_it.append(&mut kfrag_id.to_bytes());
+        to_hash_it.append(&mut new_constant_sorrow("X_COORDINATE"));
+        to_hash_it.append(&mut kfrag_id.to_vec());
 
         /*
             The index of the re-encryption key share (which in Shamir's Secret
@@ -136,7 +104,7 @@ pub fn generate_kfrags(
             generating polynomial), is used to prevent reconstruction of the
             re-encryption key without Bob's intervention
         */
-        let share_index = hash_to_curvebn::<Blake2bHash>(&to_hash_it, params, None);
+        let share_index = hash_to_curve_blake(&to_hash_it, params);
 
         /*
             The re-encryption key share is the result of evaluating the generating
@@ -144,27 +112,44 @@ pub fn generate_kfrags(
         */
         let rk = poly_eval(&coefficients, &share_index);
 
-        let u = CurvePoint::from_EcPoint(params.u_point(), params);
+        let u = CurvePoint::from_ec_point(params.u_point(), params);
         let commitment_point = &u * &rk;
 
-        // Signing
-        let mut to_hash_it2 = kfrag_id.to_bytes();
+        // Signing for receiver
+        let mut to_hash_it2 = kfrag_id.to_vec();
         to_hash_it2.append(&mut delegating_keypair.public_key().to_bytes());
         to_hash_it2.append(&mut receiving_pk.to_bytes());
         to_hash_it2.append(&mut commitment_point.to_bytes());
         to_hash_it2.append(&mut precursor.public_key().to_bytes());
-        let signature_for_receiver = signer.sign::<SHA256Hash>(&to_hash_it2);
+        let signature_for_receiver = signer.sign_sha2(&to_hash_it2);
 
-        // TODO update mode
-        let mode = kfrag::DELEGATING_AND_RECEIVING;
-        // SHA256 digest
-        let mut to_hash_it3 = kfrag_id.to_bytes();
+        // Signing for proxy
+        let mut to_hash_it3 = kfrag_id.to_vec();
         to_hash_it3.append(&mut commitment_point.to_bytes());
         to_hash_it3.append(&mut precursor.public_key().to_bytes());
-        to_hash_it3.append(&mut mode.to_vec());
-        to_hash_it3.append(&mut delegating_keypair.public_key().to_bytes());
-        to_hash_it3.append(&mut receiving_pk.to_bytes());
-        let signature_for_proxy = signer.sign::<SHA256Hash>(&to_hash_it3);
+        match mode {
+            KFragMode::DelegatingAndReceiving => {
+                to_hash_it3.append(
+                    &mut (KFragMode::DelegatingAndReceiving as u8)
+                        .to_ne_bytes()
+                        .to_vec(),
+                );
+                to_hash_it3.append(&mut delegating_keypair.public_key().to_bytes());
+                to_hash_it3.append(&mut receiving_pk.to_bytes());
+            }
+            KFragMode::DelegatingOnly => {
+                to_hash_it3.append(&mut (KFragMode::DelegatingOnly as u8).to_ne_bytes().to_vec());
+                to_hash_it3.append(&mut delegating_keypair.public_key().to_bytes());
+            }
+            KFragMode::ReceivingOnly => {
+                to_hash_it3.append(&mut (KFragMode::ReceivingOnly as u8).to_ne_bytes().to_vec());
+                to_hash_it3.append(&mut receiving_pk.to_bytes());
+            }
+            KFragMode::NoKey => {
+                to_hash_it3.append(&mut (KFragMode::NoKey as u8).to_ne_bytes().to_vec());
+            }
+        }
+        let signature_for_proxy = signer.sign_sha2(&to_hash_it3);
 
         kfrags.push(KFrag::new(
             &kfrag_id,
@@ -173,7 +158,7 @@ pub fn generate_kfrags(
             &precursor.public_key(),
             &signature_for_proxy,
             &signature_for_receiver,
-            &mode,
+            mode,
         ));
     }
 
@@ -184,39 +169,95 @@ pub fn reencrypt(
     kfrag: &KFrag,
     capsule: &Capsule,
     provide_proof: bool,
+    metadata: Option<Vec<u8>>,
     verify_kfrag: bool,
 ) -> Result<CFrag, PreErrors> {
     if !capsule.verify() {
         return Err(PreErrors::InvalidCapsule);
-    } else {
-        if verify_kfrag && !kfrag.verify_for_capsule(capsule) {
-            return Err(PreErrors::InvalidKFrag);
-        } else {
-            let rk = kfrag.re_key_share();
-            let e_i = capsule.e() * rk;
-            let v_i = capsule.v() * rk;
+    }
 
-            let mut cfrag = CFrag::new(&e_i, &v_i, kfrag.id(), kfrag.precursor());
-
-            if provide_proof {
-                match cfrag.prove_correctness(capsule, kfrag) {
-                    Ok(_) => (),
-                    Err(err) => return Err(err),
+    if verify_kfrag {
+        match kfrag.verify_for_capsule(capsule) {
+            Ok(res) => {
+                if !res {
+                    return Err(PreErrors::InvalidKFrag);
                 }
             }
-
-            return Ok(cfrag);
+            Err(err) => return Err(err),
         }
+    }
+
+    let rk = kfrag.re_key_share();
+    let e_i = capsule.e() * rk;
+    let v_i = capsule.v() * rk;
+
+    let mut cfrag = CFrag::new(&e_i, &v_i, kfrag.id(), kfrag.precursor());
+
+    if provide_proof {
+        match cfrag.prove_correctness(capsule, kfrag, metadata) {
+            Ok(_) => (),
+            Err(err) => return Err(err),
+        }
+    }
+
+    return Ok(cfrag);
+}
+
+pub fn decrypt(
+    ciphertext: Vec<u8>,
+    capsule: &Capsule,
+    decrypting_keypair: &KeyPair,
+    check_proof: bool,
+) -> Result<Vec<u8>, PreErrors> {
+    if ciphertext.len() < DEM_MIN_SIZE {
+        return Err(PreErrors::CiphertextError);
+    }
+
+    let encapsulated_key = match !capsule.attached_cfrags().is_empty() {
+        //Since there are cfrags attached, we assume this is the receiver opening the Capsule.
+        //(i.e., this is a re-encrypted capsule)
+        true => _open_capsule(capsule, decrypting_keypair, check_proof),
+        //Since there aren't cfrags attached, we assume this is Alice opening the Capsule.
+        //(i.e., this is an original capsule)
+        false => _decapsulate(capsule, decrypting_keypair.private_key()),
+    };
+
+    match encapsulated_key {
+        Ok(key) => dem_decrypt(&key, &ciphertext, Some(&capsule.to_bytes())),
+        Err(err) => Err(err),
+    }
+}
+
+fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
+    // BN context needed for the heap
+    let params = from_public_key.params();
+
+    // R point generation
+    let r = KeyPair::new(params);
+    let u = KeyPair::new(params);
+
+    // Get sign
+    let mut to_hash = r.public_key().to_bytes();
+    to_hash.append(&mut u.public_key().to_bytes());
+    let h = hash_to_curve_blake(&to_hash, params);
+
+    let s = u.private_key() + &(r.private_key() * &h);
+
+    let shared_key = from_public_key * &(r.private_key() + u.private_key());
+
+    match kdf(&shared_key.to_bytes()) {
+        Ok(key) => Ok((key, Capsule::new(r.public_key(), u.public_key(), &s))),
+        Err(err) => Err(err),
     }
 }
 
 fn _decapsulate(capsule: &Capsule, receiving: &CurveBN) -> Result<Vec<u8>, PreErrors> {
     if !capsule.verify() {
         return Err(PreErrors::InvalidCapsule);
-    } else {
-        let shared_key = &(capsule.e() + capsule.v()) * receiving;
-        kdf(&shared_key.to_bytes())
     }
+
+    let shared_key = &(capsule.e() + capsule.v()) * receiving;
+    kdf(&shared_key.to_bytes())
 }
 
 fn _decapsulate_reencrypted(
@@ -237,10 +278,10 @@ fn _decapsulate_reencrypted(
         let mut to_hash = precursor.to_bytes();
         to_hash.append(&mut pk.to_bytes());
         to_hash.append(&mut dh_point.to_bytes());
-        to_hash.append(&mut String::from("X_COORDINATE").into_bytes());
-        to_hash.append(&mut cfrag.kfrag_id().to_bytes());
+        to_hash.append(&mut new_constant_sorrow("X_COORDINATE"));
+        to_hash.append(&mut cfrag.kfrag_id().to_vec());
 
-        xs.push(hash_to_curvebn::<Blake2bHash>(&to_hash, params, None));
+        xs.push(hash_to_curve_blake(&to_hash, params));
     }
 
     let mut e_summands: Vec<CurvePoint> = Vec::new();
@@ -267,20 +308,20 @@ fn _decapsulate_reencrypted(
     let mut to_hash = precursor.to_bytes();
     to_hash.append(&mut pk.to_bytes());
     to_hash.append(&mut dh_point.to_bytes());
-    to_hash.append(&mut String::from("NON_INTERACTIVE").into_bytes());
-    let d = hash_to_curvebn::<Blake2bHash>(&to_hash, params, None);
+    to_hash.append(&mut new_constant_sorrow("NON_INTERACTIVE"));
+    let d = hash_to_curve_blake(&to_hash, params);
 
     let (e, v, s) = (capsule.e(), capsule.v(), capsule.sign());
     let mut to_hash2 = e.to_bytes();
     to_hash2.append(&mut v.to_bytes());
-    let h = hash_to_curvebn::<Blake2bHash>(&to_hash2, params, None);
+    let h = hash_to_curve_blake(&to_hash2, params);
 
     let orig_pk = capsule.delegating_key();
 
     let first = orig_pk * &(s / &d);
     let second = &(&e_prime * &h) + &v_prime;
     if !first.eq(&second) {
-        return Err(PreErrors::GenericError);
+        return Err(PreErrors::DecryptionError);
     }
 
     let shared_key = &(&e_prime + &v_prime) * &d;
@@ -295,49 +336,22 @@ fn _open_capsule(
 ) -> Result<Vec<u8>, PreErrors> {
     if !capsule.verify() {
         return Err(PreErrors::InvalidCapsule);
-    } else {
-        if check_proof {
-            let mut offending = false;
-            for cfrag in capsule.attached_cfrags() {
-                match cfrag.verify_correctness(capsule) {
-                    Ok(correct) => offending = offending && correct,
-                    Err(err) => return Err(err),
-                }
-            }
-            if offending {
-                return Err(PreErrors::InvalidCFrag);
+    }
+
+    if check_proof {
+        let mut offending = false;
+        for cfrag in capsule.attached_cfrags() {
+            match cfrag.verify_correctness(capsule) {
+                Ok(correct) => offending = offending && correct,
+                Err(err) => return Err(err),
             }
         }
-
-        _decapsulate_reencrypted(&capsule, &receiver_keypair)
-    }
-}
-
-pub fn decrypt(
-    ciphertext: Vec<u8>,
-    capsule: &Capsule,
-    receiver_keypair: &KeyPair,
-    check_proof: bool,
-) -> Result<Vec<u8>, PreErrors> {
-    if ciphertext.len() < DEM_MIN_SIZE {
-        return Err(PreErrors::CiphertextError);
-    }
-
-    let encapsulated_key = match !capsule.attached_cfrags().is_empty() {
-        //Since there are cfrags attached, we assume this is the receiver opening the Capsule.
-        //(i.e., this is a re-encrypted capsule)
-        true => _open_capsule(capsule, receiver_keypair, check_proof),
-        //Since there aren't cfrags attached, we assume this is Alice opening the Capsule.
-        //(i.e., this is an original capsule)
-        false => _decapsulate(capsule, receiver_keypair.private_key()),
-    };
-
-    match encapsulated_key {
-        Err(err) => return Err(err),
-        Ok(key) => {
-            return dem_decrypt(&key, &ciphertext);
+        if offending {
+            return Err(PreErrors::InvalidCFrag);
         }
     }
+
+    _decapsulate_reencrypted(&capsule, &receiver_keypair)
 }
 
 #[cfg(test)]
@@ -355,7 +369,10 @@ mod tests {
 
         // encrypt
         let plaintext = b"Hello, umbral!".to_vec();
-        encrypt(&alice.public_key(), &plaintext);
+        match encrypt(&alice.public_key(), &plaintext) {
+            Ok(_) => assert_eq!(true, true),
+            Err(err) => panic!("Error: {}", err),
+        };
     }
 
     #[test]
@@ -378,7 +395,17 @@ mod tests {
         let (alice, signer, bob) = _generate_credentials(&params);
 
         // keyfrags
-        generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer);
+        match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            2,
+            5,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(_) => assert_eq!(true, true),
+            Err(err) => panic!("Error: {}", err),
+        };
     }
 
     #[test]
@@ -399,11 +426,24 @@ mod tests {
         capsule.set_correctness_keys(&alice.public_key(), &carl_pk, &signer.public_key());
 
         // keyfrags
-        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
+        let kfrags = match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            2,
+            5,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(ks) => ks,
+            Err(err) => panic!("Error: {}", err),
+        };
 
         let mut res = false;
         for kfrag in kfrags {
-            res = res && kfrag.verify_for_capsule(&capsule)
+            res = res
+                && kfrag
+                    .verify_for_capsule(&capsule)
+                    .expect("Errors in KFrag verifying")
         }
 
         assert_eq!(res, false);
@@ -423,10 +463,20 @@ mod tests {
         capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
 
         //kfrags
-        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
+        let kfrags = match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            2,
+            5,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(ks) => ks,
+            Err(err) => panic!("Error: {}", err),
+        };
 
         //reencrypt
-        let r = reencrypt(&kfrags[0], &capsule, true, true);
+        let r = reencrypt(&kfrags[0], &capsule, true, None, true);
         assert_eq!(r.is_ok(), true);
     }
 
@@ -444,14 +494,27 @@ mod tests {
         capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
 
         //kfrags
-        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
+        let kfrags = match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            2,
+            5,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(ks) => ks,
+            Err(err) => panic!("Error: {}", err),
+        };
 
         let mut res = true;
         for kfrag in kfrags {
             //reencrypt
-            let cfrag = reencrypt(&kfrag, &capsule, true, true);
+            let cfrag = match reencrypt(&kfrag, &capsule, true, None, true) {
+                Ok(expr) => expr,
+                Err(err) => panic!("{}", err),
+            };
             //attach cfrag
-            res = res && capsule.attach_cfrag(&cfrag.unwrap()).is_ok();
+            res = res && capsule.attach_cfrag(&cfrag).is_ok();
         }
         assert_eq!(res, true);
     }
@@ -471,17 +534,36 @@ mod tests {
         capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
 
         //kfrags
-        let kfrags = generate_kfrags(&alice, &bob.public_key(), 2, 5, &signer).unwrap();
+        let kfrags = match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            2,
+            5,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(ks) => ks,
+            Err(err) => panic!("Error: {}", err),
+        };
 
         for kfrag in kfrags {
             //reencrypt
-            let cfrag = reencrypt(&kfrag, &capsule, true, true);
+            let cfrag = match reencrypt(&kfrag, &capsule, true, None, true) {
+                Ok(expr) => expr,
+                Err(err) => panic!("{}", err),
+            };
             //attach cfrag
-            capsule.attach_cfrag(&cfrag.unwrap());
+            match capsule.attach_cfrag(&cfrag) {
+                Ok(_) => (),
+                Err(err) => panic!("{}", err),
+            };
         }
 
         let res = decrypt(ciphertext, &capsule, &bob, true);
-        let plaintext_bob = res.expect("Error in Decryption");
+        let plaintext_bob = match res {
+            Ok(p) => p,
+            Err(err) => panic!("Error {}", err),
+        };
         println!("{:?}", String::from_utf8(plaintext_bob.to_owned()).unwrap());
         assert_eq!(plaintext, plaintext_bob);
     }
@@ -506,7 +588,7 @@ mod tests {
     #[test]
     fn hash_to_bn() {
         let params = Rc::new(Params::new(Nid::SECP256K1)); //Curve
-        let kl = hash_to_curvebn::<Blake2bHash>(&b"gadhj".to_vec(), &params, None);
+        let kl = hash_to_curve_blake(&b"gadhj".to_vec(), &params);
 
         println!("{:?}", kl.bn());
     }

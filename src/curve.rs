@@ -90,7 +90,7 @@ impl CurveBN {
     }
   }
 
-  pub fn from_BigNum(n: &BigNumRef, params: &Rc<Params>) -> Self {
+  pub fn from_big_num(n: &BigNumRef, params: &Rc<Params>) -> Self {
     CurveBN {
       bn: n.to_owned().expect("Error in BN cloning"),
       params: Rc::clone(params),
@@ -116,13 +116,13 @@ impl CurveBN {
   }
 
   pub fn rand_curve_bn(params: &Rc<Params>) -> Self {
-    let mut zero = BigNum::new().unwrap();
+    let zero = BigNum::new().unwrap();
     let mut rand = BigNum::new().unwrap();
-    let mut order = params.order();
+    let order = params.order();
 
     // Check validity
     loop {
-      order.rand_range(&mut rand);
+      order.rand_range(&mut rand).expect("Error in Randomization");
       if rand > zero && *rand < *order {
         break;
       }
@@ -264,7 +264,7 @@ impl CurvePoint {
     }
   }
 
-  pub fn from_EcPoint(p: &EcPointRef, params: &Rc<Params>) -> Self {
+  pub fn from_ec_point(p: &EcPointRef, params: &Rc<Params>) -> Self {
     CurvePoint {
       point: p.to_owned(params.group()).expect("Error in Point cloning"),
       params: Rc::clone(params),

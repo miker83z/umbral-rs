@@ -18,6 +18,9 @@ quick_error! {
       DerivationError {
         display("Key Derivation error")
       }
+      InvalidProvidedKeys {
+        display("The provided key(s) is(are) not valid")
+      }
       InvalidKFragThreshold {
         display("The threshold in input is not valid")
       }

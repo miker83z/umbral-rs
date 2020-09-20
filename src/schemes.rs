@@ -4,7 +4,7 @@ pub use crate::errors::PreErrors;
 use std::rc::Rc;
 
 use chacha20poly1305::{
-  aead::{Aead, NewAead},
+  aead::{Aead, NewAead, Payload},
   ChaCha20Poly1305, Key, Nonce,
 };
 use openssl::bn::{BigNum, BigNumContext};
@@ -146,6 +146,10 @@ impl Hash for SHA256Hash {
   }
 }
 
+pub fn hash_to_curve_blake(bytes: &Vec<u8>, params: &Rc<Params>) -> CurveBN {
+  hash_to_curvebn::<Blake2bHash>(bytes, params, None)
+}
+
 pub fn hash_to_curvebn<H>(
   bytes: &Vec<u8>,
   params: &Rc<Params>,
@@ -186,7 +190,7 @@ where
     .checked_add(&modulo, &one)
     .expect("Error in BN addition");
 
-  CurveBN::from_BigNum(&curve_bn, params)
+  CurveBN::from_big_num(&curve_bn, params)
 }
 
 pub fn kdf(base_key: &Vec<u8>) -> Result<Vec<u8>, PreErrors> {
@@ -213,16 +217,29 @@ pub fn kdf_args(
   }
 }
 
-pub fn dem_encrypt(key: &Vec<u8>, plaintext: &Vec<u8>) -> Result<Vec<u8>, PreErrors> {
-  // optional authenticated data is missing
+pub fn dem_encrypt(
+  key: &Vec<u8>,
+  plaintext: &Vec<u8>,
+  aad: Option<&Vec<u8>>,
+) -> Result<Vec<u8>, PreErrors> {
   let secret_key = Key::from_slice(key); // 32-bytes
   let cipher = ChaCha20Poly1305::new(secret_key);
 
   let mut slice = [0u8; DEM_NONCE_SIZE];
   getrandom::getrandom(&mut slice).expect("Error in Encryption nonce generation");
   let nonce = Nonce::from_slice(&slice); // 12-bytes; unique per message
+  let payload = match aad {
+    Some(a) => Payload {
+      msg: plaintext,
+      aad: a,
+    },
+    None => Payload {
+      msg: plaintext,
+      aad: b"",
+    },
+  };
 
-  match cipher.encrypt(nonce, plaintext.as_slice()) {
+  match cipher.encrypt(nonce, payload) {
     Ok(mut enc_data) => {
       let mut ciphertext = nonce.to_vec();
       ciphertext.append(&mut enc_data);
@@ -232,16 +249,32 @@ pub fn dem_encrypt(key: &Vec<u8>, plaintext: &Vec<u8>) -> Result<Vec<u8>, PreErr
   }
 }
 
-pub fn dem_decrypt(key: &Vec<u8>, ciphertext: &Vec<u8>) -> Result<Vec<u8>, PreErrors> {
-  // optional authenticated data is missing
+pub fn dem_decrypt(
+  key: &Vec<u8>,
+  ciphertext: &Vec<u8>,
+  aad: Option<&Vec<u8>>,
+) -> Result<Vec<u8>, PreErrors> {
   let secret_key = Key::from_slice(key); // 32-bytes
   let cipher = ChaCha20Poly1305::new(secret_key);
 
   let nonce = Nonce::from_slice(&ciphertext[..DEM_NONCE_SIZE]); // 12-bytes; unique per message
+  let payload = match aad {
+    Some(a) => Payload {
+      msg: &ciphertext[DEM_NONCE_SIZE..],
+      aad: a,
+    },
+    None => Payload {
+      msg: &ciphertext[DEM_NONCE_SIZE..],
+      aad: b"",
+    },
+  };
 
-  match cipher.decrypt(nonce, &ciphertext[DEM_NONCE_SIZE..]) {
+  match cipher.decrypt(nonce, payload) {
     Ok(p) => Ok(p),
-    Err(_) => Err(PreErrors::DecryptionError),
+    Err(err) => {
+      println!("{}", err);
+      return Err(PreErrors::DecryptionError);
+    }
   }
 }
 

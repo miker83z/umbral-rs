@@ -1,4 +1,14 @@
 use crate::curve::CurveBN;
+use sha2::{Digest, Sha512};
+const DIGEST_LENGTH: usize = 8;
+
+/* Replaces this module
+https://github.com/nucypher/constantSorrow/blob/master/constant_sorrow/constants.py*/
+pub fn new_constant_sorrow(name: &str) -> Vec<u8> {
+  let mut hasher = Sha512::new();
+  hasher.update(name);
+  hasher.finalize()[..DIGEST_LENGTH].to_vec()
+}
 
 pub fn lambda_coeff(id_i: &CurveBN, selected_ids: &Vec<CurveBN>) -> CurveBN {
   if selected_ids.len() < 2 {

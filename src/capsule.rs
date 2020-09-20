@@ -4,6 +4,8 @@ use crate::keys::Signature;
 use crate::kfrag::KFrag;
 use crate::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
 
+use openssl::bn::{BigNum, BigNumRef};
+
 pub struct Capsule {
   e_point: CurvePoint,
   v_point: CurvePoint,
@@ -54,15 +56,22 @@ impl Capsule {
   }
 
   pub fn delegating_key(&self) -> &CurvePoint {
-    &self.delegating_key.as_ref().unwrap()
+    &self.delegating_key.as_ref().unwrap() //TODO
   }
 
   pub fn receiving_key(&self) -> &CurvePoint {
-    &self.receiving_key.as_ref().unwrap()
+    &self.receiving_key.as_ref().unwrap() //TODO
   }
 
   pub fn verifying_key(&self) -> &CurvePoint {
-    &self.verifying_key.as_ref().unwrap()
+    &self.verifying_key.as_ref().unwrap() //TODO
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = self.e_point.to_bytes();
+    bytes.append(&mut self.v_point.to_bytes());
+    bytes.append(&mut self.sign.to_bytes());
+    bytes
   }
 
   pub fn verify(&self) -> bool {
@@ -142,7 +151,7 @@ impl CorrectnessProof {
 pub struct CFrag {
   e_i_point: CurvePoint,
   v_i_point: CurvePoint,
-  kfrag_id: CurveBN,
+  kfrag_id: BigNum,
   precursor: CurvePoint,
   proof: Option<CorrectnessProof>,
 }
@@ -151,13 +160,13 @@ impl CFrag {
   pub fn new(
     e_i: &CurvePoint,
     v_i: &CurvePoint,
-    kfrag_id: &CurveBN,
+    kfrag_id: &BigNumRef,
     precursor: &CurvePoint,
   ) -> Self {
     CFrag {
       e_i_point: e_i.to_owned(),
       v_i_point: v_i.to_owned(),
-      kfrag_id: kfrag_id.to_owned(),
+      kfrag_id: kfrag_id.to_owned().unwrap(),
       precursor: precursor.to_owned(),
       proof: None,
     }
@@ -172,59 +181,68 @@ impl CFrag {
     CFrag {
       e_i_point: self.e_i_point.to_owned(),
       v_i_point: self.v_i_point.to_owned(),
-      kfrag_id: self.kfrag_id.to_owned(),
+      kfrag_id: self.kfrag_id.to_owned().unwrap(),
       precursor: self.precursor.to_owned(),
       proof: clone_proof,
     }
   }
 
-  pub fn prove_correctness(&mut self, capsule: &Capsule, kfrag: &KFrag) -> Result<(), PreErrors> {
+  pub fn prove_correctness(
+    &mut self,
+    capsule: &Capsule,
+    kfrag: &KFrag,
+    metadata: Option<Vec<u8>>,
+  ) -> Result<(), PreErrors> {
     if !capsule.verify() {
       return Err(PreErrors::InvalidCapsule);
-    } else {
-      let params = capsule.e().params();
-
-      let rk = kfrag.re_key_share();
-      let t = CurveBN::rand_curve_bn(params);
-
-      let e = capsule.e();
-      let v = capsule.v();
-
-      let e_1 = &self.e_i_point;
-      let v_1 = &self.v_i_point;
-
-      let u = &CurvePoint::from_EcPoint(params.u_point(), params);
-      let u_1 = kfrag.commitment();
-
-      let e_2 = e * &t;
-      let v_2 = v * &t;
-      let u_2 = u * &t;
-
-      let mut to_hash = e.to_bytes();
-      to_hash.append(&mut e_1.to_bytes());
-      to_hash.append(&mut e_2.to_bytes());
-      to_hash.append(&mut v.to_bytes());
-      to_hash.append(&mut v_1.to_bytes());
-      to_hash.append(&mut v_2.to_bytes());
-      to_hash.append(&mut u.to_bytes());
-      to_hash.append(&mut u_1.to_bytes());
-      to_hash.append(&mut u_2.to_bytes());
-
-      let h = hash_to_curvebn::<ExtendedKeccak>(&to_hash, params, None);
-
-      let z_3 = &t + &(&h * rk);
-
-      self.proof = Some(CorrectnessProof::new(
-        &e_2,
-        &v_2,
-        &u_1,
-        &u_2,
-        &z_3,
-        kfrag.signature_for_receiver(),
-      ));
-
-      return Ok(());
     }
+
+    let params = capsule.e().params();
+
+    let rk = kfrag.re_key_share();
+    let t = CurveBN::rand_curve_bn(params);
+
+    let e = capsule.e();
+    let v = capsule.v();
+
+    let e_1 = &self.e_i_point;
+    let v_1 = &self.v_i_point;
+
+    let u = &CurvePoint::from_ec_point(params.u_point(), params);
+    let u_1 = kfrag.commitment();
+
+    let e_2 = e * &t;
+    let v_2 = v * &t;
+    let u_2 = u * &t;
+
+    let mut to_hash = e.to_bytes();
+    to_hash.append(&mut e_1.to_bytes());
+    to_hash.append(&mut e_2.to_bytes());
+    to_hash.append(&mut v.to_bytes());
+    to_hash.append(&mut v_1.to_bytes());
+    to_hash.append(&mut v_2.to_bytes());
+    to_hash.append(&mut u.to_bytes());
+    to_hash.append(&mut u_1.to_bytes());
+    to_hash.append(&mut u_2.to_bytes());
+    match metadata {
+      Some(m) => to_hash.append(&mut m.clone()),
+      None => (),
+    }
+
+    let h = hash_to_curvebn::<ExtendedKeccak>(&to_hash, params, None);
+
+    let z_3 = &t + &(&h * rk);
+
+    self.proof = Some(CorrectnessProof::new(
+      &e_2,
+      &v_2,
+      &u_1,
+      &u_2,
+      &z_3,
+      kfrag.signature_for_receiver(),
+    ));
+
+    return Ok(());
   }
 
   pub fn verify_correctness(&self, capsule: &Capsule) -> Result<bool, PreErrors> {
@@ -243,7 +261,7 @@ impl CFrag {
         let e_1 = &self.e_i_point;
         let v_1 = &self.v_i_point;
 
-        let u = &CurvePoint::from_EcPoint(params.u_point(), params);
+        let u = &CurvePoint::from_ec_point(params.u_point(), params);
         let u_1 = &proof.u1;
 
         let e_2 = &proof.e2;
@@ -265,7 +283,7 @@ impl CFrag {
         let precursor = &self.precursor;
         let kfrag_id = &self.kfrag_id;
 
-        let mut to_hash2 = kfrag_id.to_bytes();
+        let mut to_hash2 = kfrag_id.to_vec();
         to_hash2.append(&mut delegating_pk.to_bytes());
         to_hash2.append(&mut receiving_pk.to_bytes());
         to_hash2.append(&mut u_1.to_bytes());
@@ -313,7 +331,7 @@ impl CFrag {
     &self.precursor
   }
 
-  pub fn kfrag_id(&self) -> &CurveBN {
+  pub fn kfrag_id(&self) -> &BigNumRef {
     &self.kfrag_id
   }
 
