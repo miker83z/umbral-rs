@@ -33,11 +33,17 @@ quick_error! {
       CFragNoProofProvided {
         display("The cfrag given in input has no proof")
       }
+      CapsuleNoCorrectnessProvided {
+        display("The capsule given in input has no complete correctness key set")
+      }
       InvalidKFrag {
         display("The input parameters are not valid")
       }
       InvalidCapsule {
         display("The capsule is not valid")
+      }
+      InvalidBytes {
+        display("The bytes given in input are not valid")
       }
   }
 }

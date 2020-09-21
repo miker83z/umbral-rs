@@ -1,8 +1,10 @@
-use crate::curve::{CurveBN, CurvePoint};
+use crate::curve::{CurveBN, CurvePoint, Params};
 use crate::errors::PreErrors;
 use crate::keys::Signature;
 use crate::kfrag::KFrag;
 use crate::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
+
+use std::rc::Rc;
 
 use openssl::bn::{BigNum, BigNumRef};
 
@@ -29,7 +31,56 @@ impl Capsule {
     }
   }
 
-  // TODO return result
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+    let mut bytes = bytes.clone();
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    let sign = CurveBN::from_bytes(&bytes.split_off(bytes.len() - bn_size), params)?;
+    let v_point = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let e_point = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+
+    Ok(Capsule {
+      e_point,
+      v_point,
+      sign,
+      delegating_key: None,
+      receiving_key: None,
+      verifying_key: None,
+      attached_cfrags: Vec::new(),
+    })
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = self.e_point.to_bytes();
+    bytes.append(&mut self.v_point.to_bytes());
+    bytes.append(&mut self.sign.to_bytes());
+    bytes
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    // e_point: CurvePoint, --> 1 point_size
+    // v_point: CurvePoint, --> 1 point_size
+    // sign: BigNum, --> 1 bn_size
+    return bn_size + point_size * 2;
+  }
+
+  pub fn eq(&self, other: &Capsule) -> bool {
+    if self.e_point.eq(&other.e_point)
+      && self.v_point.eq(&other.v_point)
+      && self.sign.eq(&other.sign)
+    {
+      return true;
+    }
+    return false;
+  }
+
   pub fn set_correctness_keys(
     &mut self,
     delegating: &CurvePoint,
@@ -55,23 +106,16 @@ impl Capsule {
     }
   }
 
-  pub fn delegating_key(&self) -> &CurvePoint {
-    &self.delegating_key.as_ref().unwrap() //TODO
+  pub fn delegating_key(&self) -> &Option<CurvePoint> {
+    &self.delegating_key
   }
 
-  pub fn receiving_key(&self) -> &CurvePoint {
-    &self.receiving_key.as_ref().unwrap() //TODO
+  pub fn receiving_key(&self) -> &Option<CurvePoint> {
+    &self.receiving_key
   }
 
-  pub fn verifying_key(&self) -> &CurvePoint {
-    &self.verifying_key.as_ref().unwrap() //TODO
-  }
-
-  pub fn to_bytes(&self) -> Vec<u8> {
-    let mut bytes = self.e_point.to_bytes();
-    bytes.append(&mut self.v_point.to_bytes());
-    bytes.append(&mut self.sign.to_bytes());
-    bytes
+  pub fn verifying_key(&self) -> &Option<CurvePoint> {
+    &self.verifying_key
   }
 
   pub fn verify(&self) -> bool {
@@ -146,6 +190,71 @@ impl CorrectnessProof {
       kfrag_signature: self.kfrag_signature.to_owned(),
     }
   }
+
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+    let mut bytes = bytes.clone();
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+    let signature_size = Signature::expected_bytes_length(params);
+
+    let kfrag_signature =
+      Signature::from_bytes(&bytes.split_off(bytes.len() - signature_size), params)?;
+    let z3 = CurveBN::from_bytes(&bytes.split_off(bytes.len() - bn_size), params)?;
+    let u2 = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let u1 = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let v2 = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let e2 = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+
+    Ok(CorrectnessProof {
+      e2,
+      v2,
+      u1,
+      u2,
+      z3,
+      kfrag_signature,
+    })
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = self.e2.to_bytes();
+    bytes.append(&mut self.v2.to_bytes());
+    bytes.append(&mut self.u1.to_bytes());
+    bytes.append(&mut self.u2.to_bytes());
+    bytes.append(&mut self.z3.to_bytes());
+    bytes.append(&mut self.kfrag_signature.to_bytes());
+
+    bytes
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    //   e2: CurvePoint, --> 1 point_size
+    //   v2: CurvePoint, --> 1 point_size
+    //   u1: CurvePoint, --> 1 point_size
+    //   u2: CurvePoint, --> 1 point_size
+    //   z3: CurveBN, --> 1 bn_size
+    //   kfrag_signature: Signature, --> 2 bn_size
+
+    return bn_size * 3 + point_size * 4;
+  }
+
+  pub fn eq(&self, other: &CorrectnessProof) -> bool {
+    if self.e2.eq(&other.e2)
+      && self.v2.eq(&other.v2)
+      && self.u1.eq(&other.u1)
+      && self.u2.eq(&other.u2)
+      && self.z3.eq(&other.z3)
+      && self.kfrag_signature.eq(&other.kfrag_signature)
+    {
+      return true;
+    }
+    return false;
+  }
 }
 
 pub struct CFrag {
@@ -185,6 +294,74 @@ impl CFrag {
       precursor: self.precursor.to_owned(),
       proof: clone_proof,
     }
+  }
+
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    let mut bytes = bytes.clone();
+    let proof_size = CorrectnessProof::expected_bytes_length(params);
+    let mut proof = None;
+
+    if bytes.len() == (Self::expected_bytes_length(params) + proof_size) {
+      proof = Some(CorrectnessProof::from_bytes(
+        &bytes.split_off(bytes.len() - proof_size),
+        params,
+      )?);
+    } else if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    let precursor = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let kfrag_id = BigNum::from_slice(&bytes.split_off(bytes.len() - bn_size))
+      .expect("Error in BN conversion from bytes");
+    let v_i_point = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let e_i_point = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+
+    Ok(CFrag {
+      e_i_point,
+      v_i_point,
+      kfrag_id,
+      precursor,
+      proof,
+    })
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = self.e_i_point.to_bytes();
+    bytes.append(&mut self.v_i_point.to_bytes());
+    bytes.append(&mut self.kfrag_id.to_vec());
+    bytes.append(&mut self.precursor.to_bytes());
+    match &self.proof {
+      Some(p) => bytes.append(&mut p.to_bytes()),
+      None => (),
+    }
+
+    bytes
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    // e_i_point: CurvePoint, --> 1 point_size
+    // v_i_point: CurvePoint, --> 1 point_size
+    // kfrag_id: BigNum, --> 1 bn_size
+    // precursor: CurvePoint, --> 1 point_size
+
+    return bn_size + point_size * 3;
+  }
+
+  pub fn eq(&self, other: &CFrag) -> bool {
+    if self.e_i_point.eq(&other.e_i_point)
+      && self.v_i_point.eq(&other.v_i_point)
+      && self.kfrag_id.eq(&other.kfrag_id)
+      && self.precursor.eq(&other.precursor)
+    {
+      return true;
+    }
+    return false;
   }
 
   pub fn prove_correctness(
@@ -251,9 +428,14 @@ impl CFrag {
       Some(proof) => {
         let params = capsule.e().params();
 
-        let delegating_pk = capsule.delegating_key();
-        let verifying_pk = capsule.verifying_key();
-        let receiving_pk = capsule.receiving_key();
+        let (delegating_pk, verifying_pk, receiving_pk) = match (
+          capsule.delegating_key(),
+          capsule.verifying_key(),
+          capsule.receiving_key(),
+        ) {
+          (Some(d), Some(v), Some(r)) => (d, v, r),
+          _ => return Err(PreErrors::CapsuleNoCorrectnessProvided),
+        };
 
         let e = capsule.e();
         let v = capsule.v();
@@ -341,5 +523,9 @@ impl CFrag {
 
   pub fn v_i_point(&self) -> &CurvePoint {
     &self.v_i_point
+  }
+
+  pub fn proof(&self) -> &Option<CorrectnessProof> {
+    &self.proof
   }
 }

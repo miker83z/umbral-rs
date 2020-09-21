@@ -84,10 +84,10 @@ pub fn generate_kfrags(
 
     // Kfrags generation
     let mut kfrags: Vec<KFrag> = Vec::new();
-    let order_bytes_size = params.order().num_bits();
+    let order_bits_size = params.order().num_bits();
     for _ in 0..n {
         let mut kfrag_id = BigNum::new().unwrap();
-        match kfrag_id.rand(order_bytes_size, MsbOption::MAYBE_ZERO, false) {
+        match kfrag_id.rand(order_bits_size, MsbOption::MAYBE_ZERO, false) {
             Ok(_) => (),
             Err(_) => {
                 return Err(PreErrors::GenericError);
@@ -316,7 +316,10 @@ fn _decapsulate_reencrypted(
     to_hash2.append(&mut v.to_bytes());
     let h = hash_to_curve_blake(&to_hash2, params);
 
-    let orig_pk = capsule.delegating_key();
+    let orig_pk = match capsule.delegating_key() {
+        Some(d) => d,
+        None => return Err(PreErrors::CapsuleNoCorrectnessProvided),
+    };
 
     let first = orig_pk * &(s / &d);
     let second = &(&e_prime * &h) + &v_prime;
@@ -358,6 +361,7 @@ fn _open_capsule(
 mod tests {
     use super::*;
     use crate::curve::CurveBN;
+    use crate::keys::Signature;
     use crate::utils::poly_eval;
     use openssl::nid::Nid;
     use std::rc::Rc;
@@ -610,6 +614,60 @@ mod tests {
 
         let eighteen = &nine * two;
         assert_eq!(eighteen.bn().to_vec(), vec![18; 1]);
+    }
+
+    #[test]
+    fn bytes_conv() {
+        let params = Rc::new(Params::new(Nid::SECP256K1));
+        let (alice, signer, bob) = _generate_credentials(&params);
+        // CurveBN and CurvePoint
+        let r = CurveBN::rand_curve_bn(&params);
+        let p = CurvePoint::mul_gen(&r, &params);
+        let r_bytes = r.to_bytes();
+        let p_bytes = p.to_bytes();
+        let p_new = CurvePoint::from_bytes(&p_bytes, &params).expect("Point");
+        assert_eq!(p.eq(&p_new), true);
+        let r_new = CurveBN::from_bytes(&r_bytes, &params).expect("BN");
+        assert_eq!(r.eq(&r_new), true);
+        let p_new2 = CurvePoint::mul_gen(&r_new, &params);
+        assert_eq!(p.eq(&p_new2), true);
+        // Signature
+        let s = signer.sign_sha2(&p_bytes);
+        let s_bytes = s.to_bytes();
+        let s_new = Signature::from_bytes(&s_bytes, &params).expect("Signature");
+        assert_eq!(s.eq(&s_new), true);
+        //KFrags
+        let kfs = match generate_kfrags(
+            &alice,
+            &bob.public_key(),
+            1,
+            1,
+            &signer,
+            KFragMode::DelegatingAndReceiving,
+        ) {
+            Ok(ks) => ks,
+            Err(err) => panic!("Error: {}", err),
+        };
+        let kf_bytes = kfs[0].to_bytes();
+        let kf_new = KFrag::from_bytes(&kf_bytes, &params).expect("KFrag");
+        assert_eq!(kfs[0].eq(&kf_new), true);
+        // Capsule
+        let (_, mut capsule) = match encrypt(&alice.public_key(), &b"Hello, umbral!".to_vec()) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
+        let capsule_bytes = capsule.to_bytes();
+        let capsule_new = Capsule::from_bytes(&capsule_bytes, &params).expect("Capsule");
+        assert_eq!(capsule.eq(&capsule_new), true);
+        //CFrags
+        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key()); //TODO error handling
+        let cfrag = match reencrypt(&kf_new, &capsule, true, None, true) {
+            Ok(expr) => expr,
+            Err(err) => panic!("{}", err),
+        };
+        let cfrag_bytes = cfrag.to_bytes();
+        let cfrag_new = CFrag::from_bytes(&cfrag_bytes, &params).expect("CFrag");
+        assert_eq!(cfrag.eq(&cfrag_new), true);
     }
 
     fn _generate_credentials(params: &Rc<Params>) -> (KeyPair, Signer, KeyPair) {

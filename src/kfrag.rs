@@ -1,16 +1,30 @@
 use crate::capsule::Capsule;
-use crate::curve::{CurveBN, CurvePoint};
+use crate::curve::{CurveBN, CurvePoint, Params};
 use crate::errors::PreErrors;
 use crate::keys::Signature;
 
+use std::rc::Rc;
+
 use openssl::bn::{BigNum, BigNumRef};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum KFragMode {
   NoKey = 0,
   DelegatingOnly = 1,
   ReceivingOnly = 2,
   DelegatingAndReceiving = 3,
+}
+
+impl KFragMode {
+  pub fn from_u8(value: u8) -> Result<Self, PreErrors> {
+    match value {
+      0 => Ok(KFragMode::NoKey),
+      1 => Ok(KFragMode::DelegatingOnly),
+      2 => Ok(KFragMode::ReceivingOnly),
+      3 => Ok(KFragMode::DelegatingAndReceiving),
+      _ => Err(PreErrors::InvalidBytes),
+    }
+  }
 }
 
 pub struct KFrag {
@@ -42,6 +56,81 @@ impl KFrag {
       signature_for_receiver: signature_for_receiver.to_owned(),
       keys_mode_in_signature,
     }
+  }
+
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+    let mut bytes = bytes.clone();
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+    let signature_size = Signature::expected_bytes_length(params);
+
+    let signature_for_receiver =
+      Signature::from_bytes(&bytes.split_off(bytes.len() - signature_size), params)?;
+    let signature_for_proxy =
+      Signature::from_bytes(&bytes.split_off(bytes.len() - signature_size), params)?;
+    let keys_mode_in_signature = KFragMode::from_u8(bytes.pop().unwrap())?;
+    let precursor = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let commitment = CurvePoint::from_bytes(&bytes.split_off(bytes.len() - point_size), params)?;
+    let re_key_share = CurveBN::from_bytes(&bytes.split_off(bytes.len() - bn_size), params)?;
+    let identifier = BigNum::from_slice(&bytes).expect("Error in BN conversion from bytes");
+
+    Ok(KFrag {
+      identifier,
+      re_key_share,
+      commitment,
+      precursor,
+      signature_for_proxy,
+      signature_for_receiver,
+      keys_mode_in_signature,
+    })
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut bytes = self.identifier.to_vec();
+    bytes.append(&mut self.re_key_share.to_bytes());
+    bytes.append(&mut self.commitment.to_bytes());
+    bytes.append(&mut self.precursor.to_bytes());
+    bytes.append(&mut (self.keys_mode_in_signature as u8).to_ne_bytes().to_vec());
+    bytes.append(&mut self.signature_for_proxy.to_bytes());
+    bytes.append(&mut self.signature_for_receiver.to_bytes());
+
+    bytes
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    let bn_size = CurveBN::expected_bytes_length(params);
+    let point_size = CurvePoint::expected_bytes_length(params);
+
+    // identifier: BigNum --> 1 bn_size
+    // re_key_share: CurveBN --> 1 bn_size
+    // commitment: CurvePoint --> 1 point_size
+    // precursor: CurvePoint --> 1 point_size
+    // signature_for_proxy: Signature --> 2 bn_size
+    // signature_for_receiver: Signature --> 2 bn_size
+    // keys_mode_in_signature: KFragMode --> 1
+
+    return bn_size * 6 + point_size * 2 + 1;
+  }
+
+  pub fn eq(&self, other: &KFrag) -> bool {
+    if self.identifier.eq(&other.identifier)
+      && self.re_key_share.eq(&other.re_key_share)
+      && self.commitment.eq(&other.commitment)
+      && self.precursor.eq(&other.precursor)
+      && self.signature_for_proxy.eq(&other.signature_for_proxy)
+      && self
+        .signature_for_receiver
+        .eq(&other.signature_for_receiver)
+      && self
+        .keys_mode_in_signature
+        .eq(&other.keys_mode_in_signature)
+    {
+      return true;
+    }
+    return false;
   }
 
   pub fn delegating_key_in_signature(&self) -> bool {
@@ -136,11 +225,15 @@ impl KFrag {
   }
 
   pub fn verify_for_capsule(&self, capsule: &Capsule) -> Result<bool, PreErrors> {
-    self.verify(
+    let (delegating_pk, verifying_pk, receiving_pk) = match (
+      capsule.delegating_key(),
       capsule.verifying_key(),
-      Some(capsule.delegating_key()),
-      Some(capsule.receiving_key()),
-    )
+      capsule.receiving_key(),
+    ) {
+      (Some(d), Some(v), Some(r)) => (d, v, r),
+      _ => return Err(PreErrors::CapsuleNoCorrectnessProvided),
+    };
+    self.verify(verifying_pk, Some(delegating_pk), Some(receiving_pk))
   }
 
   pub fn re_key_share(&self) -> &CurveBN {

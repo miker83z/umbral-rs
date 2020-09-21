@@ -1,3 +1,4 @@
+use crate::errors::PreErrors;
 use crate::schemes::{unsafe_hash_to_point, Blake2bHash};
 
 use std::{cell::RefCell, rc::Rc};
@@ -12,6 +13,8 @@ pub struct Params {
   g_point: EcPoint,
   order: BigNum,
   u_point: EcPoint,
+  field_order_size_in_bytes: usize,
+  group_order_size_in_bytes: usize,
   ctx: Rc<RefCell<BigNumContext>>,
 }
 
@@ -22,6 +25,8 @@ impl Params {
     let g_point = group.generator().to_owned(&group).unwrap();
     let mut order = BigNum::new().unwrap();
     group.order(&mut order, &mut ctx).unwrap();
+    let field_order_size_in_bytes = ((group.degree() + 7) / 8) as usize;
+    let group_order_size_in_bytes = order.num_bytes() as usize;
     let u_point = unsafe_hash_to_point::<Blake2bHash>(
       Some(
         &g_point
@@ -37,6 +42,8 @@ impl Params {
       g_point,
       order,
       u_point,
+      field_order_size_in_bytes,
+      group_order_size_in_bytes,
       ctx: Rc::new(RefCell::new(ctx)),
     }
   }
@@ -55,6 +62,14 @@ impl Params {
 
   pub fn u_point(&self) -> &EcPointRef {
     &self.u_point
+  }
+
+  pub fn field_order_size_in_bytes(&self) -> usize {
+    self.field_order_size_in_bytes
+  }
+
+  pub fn group_order_size_in_bytes(&self) -> usize {
+    self.group_order_size_in_bytes
   }
 
   pub fn ctx(&self) -> &Rc<RefCell<BigNumContext>> {
@@ -97,10 +112,18 @@ impl CurveBN {
     }
   }
 
-  pub fn from_slice(n: &Vec<u8>, params: &Rc<Params>) -> Self {
-    CurveBN {
-      bn: BigNum::from_slice(&n).expect("Error in BN creation"),
-      params: Rc::clone(params),
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+    let bn = BigNum::from_slice(&bytes).expect("Error in BN conversion");
+    if Self::bn_is_on_curve(&bn, params) {
+      Ok(CurveBN {
+        bn,
+        params: Rc::clone(params),
+      })
+    } else {
+      Err(PreErrors::InvalidBytes)
     }
   }
 
@@ -111,19 +134,14 @@ impl CurveBN {
     }
   }
 
-  pub fn to_bytes(&self) -> Vec<u8> {
-    self.bn.to_vec()
-  }
-
   pub fn rand_curve_bn(params: &Rc<Params>) -> Self {
-    let zero = BigNum::new().unwrap();
     let mut rand = BigNum::new().unwrap();
-    let order = params.order();
-
-    // Check validity
     loop {
-      order.rand_range(&mut rand).expect("Error in Randomization");
-      if rand > zero && *rand < *order {
+      params
+        .order()
+        .rand_range(&mut rand)
+        .expect("Error in Randomization");
+      if CurveBN::bn_is_on_curve(&rand, params) {
         break;
       }
     }
@@ -132,6 +150,26 @@ impl CurveBN {
       bn: rand,
       params: Rc::clone(params),
     }
+  }
+
+  pub fn to_bytes(&self) -> Vec<u8> {
+    let mut right = self.bn.to_vec();
+    let rem = (self.params.group_order_size_in_bytes() as i64) - (right.len() as i64);
+    if rem < 0 {
+      panic!("Error: BN size too large");
+    }
+    let mut left = vec![0_u8; rem as usize];
+    left.append(&mut right);
+    left
+  }
+
+  fn bn_is_on_curve(bn: &BigNumRef, params: &Rc<Params>) -> bool {
+    let zero = BigNum::new().unwrap();
+    bn > &zero && bn < params.order()
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    params.group_order_size_in_bytes()
   }
 
   pub fn eq(&self, other: &CurveBN) -> bool {
@@ -271,6 +309,22 @@ impl CurvePoint {
     }
   }
 
+  pub fn from_bytes(bytes: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    if bytes.len() != Self::expected_bytes_length(params) {
+      return Err(PreErrors::InvalidBytes);
+    }
+    match EcPoint::from_bytes(params.group(), bytes, &mut params.ctx().borrow_mut()) {
+      Ok(point) => Ok(CurvePoint {
+        point,
+        params: Rc::clone(params),
+      }),
+      Err(err) => {
+        println!("{}", err);
+        Err(PreErrors::InvalidBytes)
+      }
+    }
+  }
+
   pub fn mul_gen(other: &CurveBN, params: &Rc<Params>) -> Self {
     let mut res = EcPoint::new(params.group()).expect("Error in Point creation");
     res
@@ -281,6 +335,11 @@ impl CurvePoint {
       point: res,
       params: Rc::clone(params),
     }
+  }
+
+  pub fn expected_bytes_length(params: &Rc<Params>) -> usize {
+    //assumess compressed, if not compressed = 1 + 2 * field_size,
+    1 + params.field_order_size_in_bytes()
   }
 
   pub fn to_owned(&self) -> Self {
