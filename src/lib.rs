@@ -64,7 +64,6 @@ pub fn generate_kfrags(
     to_hash.append(&mut receiving_pk.to_bytes());
     to_hash.append(&mut dh_point.to_bytes());
     let to_hash2 = to_hash.clone();
-    //TODO constant hash, constant_sorrow py module
     to_hash.append(&mut new_constant_sorrow("NON_INTERACTIVE"));
 
     // Secret value 'd' allows to make Umbral non-interactive
@@ -660,7 +659,7 @@ mod tests {
         let capsule_new = Capsule::from_bytes(&capsule_bytes, &params).expect("Capsule");
         assert_eq!(capsule.eq(&capsule_new), true);
         //CFrags
-        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key()); //TODO error handling
+        capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
         let cfrag = match reencrypt(&kf_new, &capsule, true, None, true) {
             Ok(expr) => expr,
             Err(err) => panic!("{}", err),

@@ -37,7 +37,10 @@ impl Hash for Blake2bHash {
     let mut new_c = customization_string.clone();
     let rem = (CUSTOMIZATION_STRING_LENGTH as i64) - (new_c.len() as i64);
     if rem < 0 {
-      panic!("TODO"); //TODO
+      panic!(
+        "Customization string is larger than {} characters",
+        CUSTOMIZATION_STRING_LENGTH
+      ); //maybe TODO
     }
     for _ in 0..rem {
       new_c.append(&mut CUSTOMIZATION_STRING_PAD.to_owned().to_vec());
@@ -76,7 +79,10 @@ impl Hash for ExtendedKeccak {
     let mut new_c = customization_string.clone();
     let rem = (CUSTOMIZATION_STRING_LENGTH as i64) - (new_c.len() as i64);
     if rem < 0 {
-      panic!("TODO"); //TODO
+      panic!(
+        "Customization string is larger than {} characters",
+        CUSTOMIZATION_STRING_LENGTH
+      ); //maybe TODO
     }
     for _ in 0..rem {
       new_c.append(&mut CUSTOMIZATION_STRING_PAD.to_owned().to_vec());
@@ -120,7 +126,10 @@ impl Hash for SHA256Hash {
     let mut new_c = customization_string.clone();
     let rem = (CUSTOMIZATION_STRING_LENGTH as i64) - (new_c.len() as i64);
     if rem < 0 {
-      panic!("TODO"); //TODO
+      panic!(
+        "Customization string is larger than {} characters",
+        CUSTOMIZATION_STRING_LENGTH
+      ); //maybe TODO
     }
     for _ in 0..rem {
       new_c.append(&mut CUSTOMIZATION_STRING_PAD.to_owned().to_vec());

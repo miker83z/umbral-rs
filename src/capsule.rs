@@ -158,6 +158,21 @@ pub struct CorrectnessProof {
   u2: CurvePoint,
   z3: CurveBN,
   kfrag_signature: Signature,
+  metadata: Option<Vec<u8>>,
+}
+
+impl Clone for CorrectnessProof {
+  fn clone(&self) -> Self {
+    CorrectnessProof {
+      e2: self.e2.to_owned(),
+      v2: self.v2.to_owned(),
+      u1: self.u1.to_owned(),
+      u2: self.u2.to_owned(),
+      z3: self.z3.to_owned(),
+      kfrag_signature: self.kfrag_signature.to_owned(),
+      metadata: self.metadata.clone(),
+    }
+  }
 }
 
 impl CorrectnessProof {
@@ -168,6 +183,7 @@ impl CorrectnessProof {
     point_kfrag_pok: &CurvePoint,
     bn_sig: &CurveBN,
     kfrag_signature: &Signature,
+    metadata: Option<Vec<u8>>,
   ) -> Self {
     CorrectnessProof {
       e2: point_e2.to_owned(),
@@ -176,18 +192,7 @@ impl CorrectnessProof {
       u2: point_kfrag_pok.to_owned(),
       z3: bn_sig.to_owned(),
       kfrag_signature: kfrag_signature.to_owned(),
-    }
-  }
-
-  //TODO as trait
-  pub fn clone(&self) -> Self {
-    CorrectnessProof {
-      e2: self.e2.to_owned(),
-      v2: self.v2.to_owned(),
-      u1: self.u1.to_owned(),
-      u2: self.u2.to_owned(),
-      z3: self.z3.to_owned(),
-      kfrag_signature: self.kfrag_signature.to_owned(),
+      metadata,
     }
   }
 
@@ -215,6 +220,7 @@ impl CorrectnessProof {
       u2,
       z3,
       kfrag_signature,
+      metadata: None,
     })
   }
 
@@ -265,6 +271,22 @@ pub struct CFrag {
   proof: Option<CorrectnessProof>,
 }
 
+impl Clone for CFrag {
+  fn clone(&self) -> Self {
+    let clone_proof = match &self.proof {
+      Some(expr) => Some(expr.clone()),
+      None => None,
+    };
+    CFrag {
+      e_i_point: self.e_i_point.to_owned(),
+      v_i_point: self.v_i_point.to_owned(),
+      kfrag_id: self.kfrag_id.to_owned().unwrap(),
+      precursor: self.precursor.to_owned(),
+      proof: clone_proof,
+    }
+  }
+}
+
 impl CFrag {
   pub fn new(
     e_i: &CurvePoint,
@@ -278,21 +300,6 @@ impl CFrag {
       kfrag_id: kfrag_id.to_owned().unwrap(),
       precursor: precursor.to_owned(),
       proof: None,
-    }
-  }
-
-  //TODO as trait
-  pub fn clone(&self) -> Self {
-    let clone_proof = match &self.proof {
-      Some(expr) => Some(expr.clone()),
-      None => None,
-    };
-    CFrag {
-      e_i_point: self.e_i_point.to_owned(),
-      v_i_point: self.v_i_point.to_owned(),
-      kfrag_id: self.kfrag_id.to_owned().unwrap(),
-      precursor: self.precursor.to_owned(),
-      proof: clone_proof,
     }
   }
 
@@ -401,7 +408,7 @@ impl CFrag {
     to_hash.append(&mut u.to_bytes());
     to_hash.append(&mut u_1.to_bytes());
     to_hash.append(&mut u_2.to_bytes());
-    match metadata {
+    match &metadata {
       Some(m) => to_hash.append(&mut m.clone()),
       None => (),
     }
@@ -417,6 +424,7 @@ impl CFrag {
       &u_2,
       &z_3,
       kfrag.signature_for_receiver(),
+      metadata,
     ));
 
     return Ok(());
@@ -459,7 +467,10 @@ impl CFrag {
         to_hash.append(&mut u.to_bytes());
         to_hash.append(&mut u_1.to_bytes());
         to_hash.append(&mut u_2.to_bytes());
-        //TODO check metadata
+        match &proof.metadata {
+          Some(m) => to_hash.append(&mut m.clone()),
+          None => (),
+        }
         let h = hash_to_curvebn::<ExtendedKeccak>(&to_hash, params, None);
 
         let precursor = &self.precursor;
