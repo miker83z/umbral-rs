@@ -14,10 +14,16 @@ use openssl::{
   nid::Nid,
 };
 
+/// Creates the standard parameters needed to operate with this crate, i.e.
+/// the SECP256K1 curve
 pub fn new_standard_params() -> Rc<Params> {
   Rc::new(Params::new(Nid::SECP256K1)) //Curve
 }
 
+/// Performs an encryption using the DEM schema and encapsulates a key
+/// for the sender using the public key provided.
+///
+/// Returns the ciphertext and the KEM Capsule.
 pub fn encrypt(
   from_public_key: &CurvePoint,
   plaintext: &Vec<u8>,
@@ -33,6 +39,12 @@ pub fn encrypt(
   };
 }
 
+/// Creates a re-encryption key from the delegating public key to the
+/// receiving public key, and splits it in KFrags, using Shamir's Secret Sharing.
+///
+/// Requires a threshold number of KFrags out of N.
+///
+/// Returns a list of N KFrags
 pub fn generate_kfrags(
   delegating_keypair: &KeyPair,
   receiving_pk: &CurvePoint,
@@ -165,6 +177,8 @@ pub fn generate_kfrags(
   Ok(kfrags)
 }
 
+/// Performs the re-encryption operation of proxies and produces a capsule
+/// fragment, i.e. a CFrag, from a KFrag given in input.
 pub fn reencrypt(
   kfrag: &KFrag,
   capsule: &Capsule,
@@ -203,6 +217,8 @@ pub fn reencrypt(
   return Ok(cfrag);
 }
 
+/// Opens the capsule and gets what's inside. If it is a symmetric key, then
+/// it is used to decrypt the ciphertext and return the resulting cleartext.
 pub fn decrypt(
   ciphertext: Vec<u8>,
   capsule: &Capsule,
