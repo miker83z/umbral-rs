@@ -16,10 +16,12 @@
 //!
 //! ## Encrypt/Decrypt Example
 //! ```rust
+//! use umbral::pre::*;
+//!
 //! let params = new_standard_params();
-//! let alice = KeyPair::new(params);
-//! let signer = Signer::new(params);
-//! let bob = KeyPair::new(params);
+//! let alice = KeyPair::new(&params);
+//! let signer = Signer::new(&params);
+//! let bob = KeyPair::new(&params);
 //!
 //! let plaintext = b"Hello, umbral!".to_vec();
 //! let (ciphertext, mut capsule) = encrypt(&alice.public_key(), &plaintext).unwrap();

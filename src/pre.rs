@@ -1,13 +1,15 @@
-use std::rc::Rc;
+pub use crate::internal::keys::{KeyPair, Signer};
+pub use crate::internal::kfrag::KFragMode;
 
 use crate::internal::capsule::{CFrag, Capsule};
 use crate::internal::curve::Params;
 use crate::internal::curve::{CurveBN, CurvePoint};
 use crate::internal::errors::PreErrors;
-use crate::internal::keys::{KeyPair, Signer};
-use crate::internal::kfrag::{KFrag, KFragMode};
+use crate::internal::kfrag::KFrag;
 use crate::internal::schemes::{dem_decrypt, dem_encrypt, hash_to_curve_blake, kdf, DEM_MIN_SIZE};
 use crate::internal::utils::{lambda_coeff, new_constant_sorrow, poly_eval};
+
+use std::rc::Rc;
 
 use openssl::{
   bn::{BigNum, MsbOption},

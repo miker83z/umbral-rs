@@ -1,4 +1,3 @@
-extern crate quick_error;
 use quick_error::quick_error;
 
 quick_error! {
