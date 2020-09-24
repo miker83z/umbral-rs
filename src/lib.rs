@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "unstable", feature(test))]
 
-//! umbral is the implementation of the
+//! umbral-rs is the implementation of the
 //! [Umbral](https://github.com/nucypher/umbral-doc/blob/master/umbral-doc.pdf)
 //! threshold proxy re-encryption scheme, built with Rust taking as reference
 //! the [Python](https://github.com/nucypher/pyUmbral) version createdby the
@@ -16,7 +16,7 @@
 //!
 //! ## Encrypt/Decrypt Example
 //! ```rust
-//! use umbral::pre::*;
+//! use umbral_rs::pre::*;
 //!
 //! let params = new_standard_params();
 //! let alice = KeyPair::new(&params);

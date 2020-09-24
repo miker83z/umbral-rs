@@ -7,7 +7,7 @@ Umbral consists of a Proxy Re-Encryption scheme, in which a data holder can dele
 ## Encrypt/Decrypt Example
 
 ```rust
-use umbral::pre::*;
+use umbral_rs::pre::*;
 
 let params = new_standard_params();
 let alice = KeyPair::new(&params);

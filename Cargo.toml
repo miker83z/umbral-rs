@@ -1,5 +1,5 @@
 [package]
-name = "umbral"
+name = "umbral-rs"
 version = "0.0.1"
 authors = ["miker83z <mikerz83@gmail.com>"]
 readme = "README.md"
