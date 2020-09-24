@@ -1,8 +1,8 @@
-use crate::curve::{CurveBN, CurvePoint, Params};
-use crate::errors::PreErrors;
-use crate::keys::Signature;
-use crate::kfrag::KFrag;
-use crate::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
+use crate::internal::curve::{CurveBN, CurvePoint, Params};
+use crate::internal::errors::PreErrors;
+use crate::internal::keys::Signature;
+use crate::internal::kfrag::KFrag;
+use crate::internal::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
 
 use std::rc::Rc;
 

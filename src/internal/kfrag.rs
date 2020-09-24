@@ -1,7 +1,7 @@
-use crate::capsule::Capsule;
-use crate::curve::{CurveBN, CurvePoint, Params};
-use crate::errors::PreErrors;
-use crate::keys::Signature;
+use crate::internal::capsule::Capsule;
+use crate::internal::curve::{CurveBN, CurvePoint, Params};
+use crate::internal::errors::PreErrors;
+use crate::internal::keys::Signature;
 
 use std::rc::Rc;
 

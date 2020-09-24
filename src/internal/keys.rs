@@ -1,6 +1,6 @@
-pub use crate::curve::{CurveBN, CurvePoint, Params};
-use crate::errors::PreErrors;
-pub use crate::schemes::{Hash, SHA256Hash};
+pub use crate::internal::curve::{CurveBN, CurvePoint, Params};
+use crate::internal::errors::PreErrors;
+pub use crate::internal::schemes::{Hash, SHA256Hash};
 
 use std::rc::Rc;
 

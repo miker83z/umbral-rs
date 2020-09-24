@@ -1,5 +1,7 @@
-use crate::curve::CurveBN;
+use crate::internal::curve::CurveBN;
+
 use sha2::{Digest, Sha512};
+
 const DIGEST_LENGTH: usize = 8;
 
 /* Replaces this module

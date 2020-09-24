@@ -1,17 +1,16 @@
-pub use crate::curve::{CurveBN, CurvePoint, Params};
-pub use crate::errors::PreErrors;
+use crate::internal::curve::{CurveBN, Params};
+use crate::internal::errors::PreErrors;
 
 use std::rc::Rc;
 
+use blake2::{Blake2b, Digest};
 use chacha20poly1305::{
   aead::{Aead, NewAead, Payload},
   ChaCha20Poly1305, Key, Nonce,
 };
+use hkdf::Hkdf;
 use openssl::bn::{BigNum, BigNumContext};
 use openssl::ec::{EcGroupRef, EcPoint};
-
-use blake2::{Blake2b, Digest};
-use hkdf::Hkdf;
 use sha2::Sha256;
 use sha3::Keccak256;
 

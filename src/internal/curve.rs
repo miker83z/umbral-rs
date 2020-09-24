@@ -1,12 +1,12 @@
-use crate::errors::PreErrors;
-use crate::schemes::{unsafe_hash_to_point, Blake2bHash};
+use crate::internal::errors::PreErrors;
+use crate::internal::schemes::{unsafe_hash_to_point, Blake2bHash};
 
+use std::ops::{Add, Div, Mul, Sub};
 use std::{cell::RefCell, rc::Rc};
 
 use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::ec::{EcGroup, EcGroupRef, EcPoint, EcPointRef, PointConversionForm};
 use openssl::nid::Nid;
-use std::ops::{Add, Div, Mul, Sub};
 
 pub struct Params {
   group: EcGroup,
