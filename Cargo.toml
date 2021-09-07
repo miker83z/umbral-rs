@@ -5,6 +5,7 @@ authors = ["miker83z <mikerz83@gmail.com>"]
 readme = "README.md"
 license = "GPL-3.0-only"
 repository = "https://github.com/miker83z/umbral-rs"
+documentation = "https://docs.rs/umbral-rs"
 categories = ["cryptography", "algorithms"]
 keywords = ["cryptography", "proxy-re-encryption", "PRE", "threshold", "secret-sharing"]
 description = "A pure-Rust implementation of the Umbral threshold Proxy Re-encryption scheme"

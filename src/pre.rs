@@ -379,6 +379,7 @@ fn _open_capsule(
 mod tests {
   use super::*;
   use crate::internal::keys::Signature;
+  use std::{thread, time};
 
   #[test]
   fn encrypt_simple() {
@@ -688,5 +689,233 @@ mod tests {
     let bob = KeyPair::new(params);
 
     (alice, signer, bob)
+  }
+
+  #[test]
+  fn new_test_mule_1() {
+    let params = new_standard_params();
+    let (alice, signer, bob) = _generate_credentials(&params);
+
+    //////////// Generate key x
+    // BN context needed for the heap
+    let params = alice.public_key().params();
+    // R point generation
+    let r = KeyPair::new(params);
+    let u = KeyPair::new(params);
+    let shared_key = alice.public_key() * &(r.private_key() + u.private_key());
+    let key_x = match kdf(&shared_key.to_bytes()) {
+      Ok(key) => key,
+      Err(err) => panic!("{}", err),
+    };
+    ////////////
+
+    let sizes: [usize; 7] = [10485, 52428, 104857, 524288, 1048576, 5242880, 10485760];
+
+    for outer in 0..7 {
+      let mut slice_payload = vec![0u8; sizes[outer]].into_boxed_slice();
+      getrandom::getrandom(&mut slice_payload).expect("Error in payload generation");
+      let plaintext = slice_payload.to_vec(); //b"Hello, umbral!".to_vec();
+      let ciphertext = match dem_encrypt(&key_x, &plaintext, None) {
+        Ok(ciphertext) => ciphertext,
+        Err(err) => panic!("{}", err),
+      };
+
+      let tries = 10;
+      let mut duration_enc = 0;
+      let mut duration_dec = 0;
+      for _ in 0..10 {
+        //////////// Encrypt
+        let now_enc = time::Instant::now();
+        // Tender
+        let mut slice_tender = vec![0u8; 150].into_boxed_slice();
+        getrandom::getrandom(&mut slice_tender).expect("Error in tender generation");
+        let tender = slice_tender.to_vec();
+        let tender_signature = signer.sign_sha2(&tender);
+        // Balance
+        let mut slice_balance = vec![0u8; 110].into_boxed_slice();
+        getrandom::getrandom(&mut slice_balance).expect("Error in balance generation");
+        let balance = slice_balance.to_vec();
+        let balance_signature = signer.sign_sha2(&balance);
+        // Address
+        let mut slice_address = vec![0u8; 42].into_boxed_slice();
+        getrandom::getrandom(&mut slice_address).expect("Error in address generation");
+        let address = slice_address.to_vec();
+        let address_signature = signer.sign_sha2(&address);
+        // Shared key
+        let shared_key_alice = bob.public_key() * alice.private_key();
+        let key_alice = match kdf(&shared_key_alice.to_bytes()) {
+          Ok(key) => key,
+          Err(err) => panic!("{}", err),
+        };
+        let other_data = {
+          let mut r = tender.clone();
+          r.extend_from_slice(&tender_signature.to_bytes());
+          r.extend_from_slice(&balance);
+          r.extend_from_slice(&balance_signature.to_bytes());
+          r.extend_from_slice(&address_signature.to_bytes());
+          r
+        };
+        let other_data_ciphertext = match dem_encrypt(&key_alice, &other_data, None) {
+          Ok(ciphertext) => ciphertext,
+          Err(err) => panic!("{}", err),
+        };
+        duration_enc += now_enc.elapsed().as_millis();
+
+        //////////// Decrypt
+        let now_dec = time::Instant::now();
+        let shared_key_bob = alice.public_key() * bob.private_key();
+        let key_bob = match kdf(&shared_key_bob.to_bytes()) {
+          Ok(key) => key,
+          Err(err) => panic!("{}", err),
+        };
+        let other_data_dec = match dem_decrypt(&key_bob, &other_data_ciphertext, None) {
+          Ok(p) => p,
+          Err(err) => panic!("{}", err),
+        };
+        let tender_verification = tender_signature.verify_sha2(&tender, &signer.public_key());
+        assert_eq!(tender_verification, true);
+        let balance_verification = balance_signature.verify_sha2(&balance, &signer.public_key());
+        assert_eq!(balance_verification, true);
+        let address_verification = address_signature.verify_sha2(&address, &signer.public_key());
+        assert_eq!(address_verification, true);
+        duration_dec += now_dec.elapsed().as_millis();
+        assert_eq!(other_data, other_data_dec);
+      }
+      println!(
+        "Enc {:?}, Dec {:?}",
+        duration_enc / tries,
+        duration_dec / tries
+      );
+    }
+  }
+
+  #[test]
+  fn new_test_mule_2() {
+    let params = new_standard_params();
+    let (alice, signerb, bob) = _generate_credentials(&params);
+    let (_, signera, _) = _generate_credentials(&params);
+
+    //////////// Public key encryption
+    // BN context needed for the heap
+    let params = alice.public_key().params();
+    // R point generation
+    let r = KeyPair::new(params);
+    let u = KeyPair::new(params);
+    let shared_key = alice.public_key() * &(r.private_key() + u.private_key());
+    let key_x = match kdf(&shared_key.to_bytes()) {
+      Ok(key) => key,
+      Err(err) => panic!("{}", err),
+    };
+    ////////////
+
+    let sizes: [usize; 7] = [10485, 52428, 104857, 524288, 1048576, 5242880, 10485760];
+
+    for outer in 0..7 {
+      let mut slice_payload = vec![0u8; sizes[outer]].into_boxed_slice();
+      getrandom::getrandom(&mut slice_payload).expect("Error in payload generation");
+      let plaintext = slice_payload.to_vec();
+      //////////// R Public key encryption 2
+      let ciphertext = match dem_encrypt(&key_x, &plaintext, None) {
+        Ok(ciphertext) => ciphertext,
+        Err(err) => panic!("{}", err),
+      };
+      //////////// Bob encryption
+      // Tender
+      let mut slice_tender = vec![0u8; 96].into_boxed_slice();
+      getrandom::getrandom(&mut slice_tender).expect("Error in tender generation");
+      let tender = slice_tender.to_vec();
+      let tender_signature = signerb.sign_sha2(&tender);
+      // Shared key
+      let shared_key_bob = alice.public_key() * bob.private_key();
+      let key_bob = match kdf(&shared_key_bob.to_bytes()) {
+        Ok(key) => key,
+        Err(err) => panic!("{}", err),
+      };
+      let other_data_tender = {
+        let mut r = tender.clone();
+        r.extend_from_slice(&tender_signature.to_bytes());
+        r
+      };
+      let other_data_tender_ciphertext = match dem_encrypt(&key_bob, &other_data_tender, None) {
+        Ok(ciphertext) => ciphertext,
+        Err(err) => panic!("{}", err),
+      };
+
+      let tries = 10;
+      let mut duration_dec_tender = 0;
+      let mut duration_enc_balance = 0;
+      let mut duration_dec_balance = 0;
+      let mut duration_dec_plaintext = 0;
+      for _ in 0..10 {
+        //////////// Tender Decrypt
+        let now_dec = time::Instant::now();
+        let shared_key_alice = bob.public_key() * alice.private_key();
+        let key_alice = match kdf(&shared_key_alice.to_bytes()) {
+          Ok(key) => key,
+          Err(err) => panic!("{}", err),
+        };
+        let other_data_tender_dec =
+          match dem_decrypt(&key_alice, &other_data_tender_ciphertext, None) {
+            Ok(p) => p,
+            Err(err) => panic!("{}", err),
+          };
+        let tender_verification = tender_signature.verify_sha2(&tender, &signerb.public_key());
+        assert_eq!(tender_verification, true);
+        duration_dec_tender += now_dec.elapsed().as_millis();
+        assert_eq!(other_data_tender, other_data_tender_dec);
+
+        //////////// Encrypt
+        let now_enc = time::Instant::now();
+        // Balance
+        let mut slice_balance = vec![0u8; 110].into_boxed_slice();
+        getrandom::getrandom(&mut slice_balance).expect("Error in balance generation");
+        let balance = slice_balance.to_vec();
+        let balance_signature = signera.sign_sha2(&balance);
+        let other_data_balance = {
+          let mut r = balance.clone();
+          r.extend_from_slice(&balance_signature.to_bytes());
+          r
+        };
+        let other_data_balance_ciphertext = match dem_encrypt(&key_alice, &other_data_balance, None)
+        {
+          Ok(ciphertext) => ciphertext,
+          Err(err) => panic!("{}", err),
+        };
+        duration_enc_balance += now_enc.elapsed().as_millis();
+
+        //////////// Bob Decrypt
+        let now_dec_2 = time::Instant::now();
+        let other_data_balance_dec =
+          match dem_decrypt(&key_bob, &other_data_balance_ciphertext, None) {
+            Ok(p) => p,
+            Err(err) => panic!("{}", err),
+          };
+        let balance_verification = balance_signature.verify_sha2(&balance, &signera.public_key());
+        assert_eq!(balance_verification, true);
+        duration_dec_balance += now_dec_2.elapsed().as_millis();
+        assert_eq!(other_data_balance, other_data_balance_dec);
+
+        //////////// Payload Decrypt
+        let now_dec_3 = time::Instant::now();
+        let shared_key_ecies = &(r.public_key() + u.public_key()) * alice.private_key();
+        let key_ecies = match kdf(&shared_key_ecies.to_bytes()) {
+          Ok(key) => key,
+          Err(err) => panic!("{}", err),
+        };
+        let plaintext_dec = match dem_decrypt(&key_ecies, &ciphertext, None) {
+          Ok(p) => p,
+          Err(err) => panic!("{}", err),
+        };
+        duration_dec_plaintext += now_dec_3.elapsed().as_millis();
+        assert_eq!(plaintext, plaintext_dec);
+      }
+      println!(
+        "Dec Tender {:?}, Enc Balance {:?}, Dec Balance {:?}, Dec Payload {:?}",
+        duration_dec_tender / tries,
+        duration_enc_balance / tries,
+        duration_dec_balance / tries,
+        duration_dec_plaintext / tries
+      );
+    }
   }
 }
