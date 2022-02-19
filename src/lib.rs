@@ -50,5 +50,5 @@
 //! println!("{:?}", String::from_utf8(plaintext_bob.to_owned()).unwrap());
 //!  ```
 
-mod internal;
+pub mod internal;
 pub mod pre;

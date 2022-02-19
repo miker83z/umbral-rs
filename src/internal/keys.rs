@@ -2,9 +2,9 @@ pub use crate::internal::curve::{CurveBN, CurvePoint, Params};
 use crate::internal::errors::PreErrors;
 pub use crate::internal::schemes::{Hash, SHA256Hash};
 
-use std::rc::Rc;
+pub use std::rc::Rc;
 
-use openssl::ec::EcKey;
+pub use openssl::ec::EcKey;
 use openssl::ecdsa::EcdsaSig;
 use openssl::pkey::Private;
 
@@ -20,6 +20,33 @@ impl KeyPair {
     KeyPair {
       pk: CurvePoint::from_ec_point(key.public_key(), params),
       sk: CurveBN::from_big_num(key.private_key(), params),
+    }
+  }
+
+  pub fn to_bytes(&self) -> (Vec<u8>, Vec<u8>) {
+    let pk = self.pk.to_bytes();
+    let sk = self.sk.to_bytes();
+    (pk, sk)
+  }
+
+  pub fn from_bytes(pk: &Vec<u8>, sk: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    let cp_length = CurvePoint::expected_bytes_length(params);
+    let bn_length = CurveBN::expected_bytes_length(params);
+    if pk.len() != cp_length || sk.len() != bn_length {
+      return Err(PreErrors::InvalidBytes);
+    }
+    match CurvePoint::from_bytes(&pk, &params) {
+      Ok(point) => match CurveBN::from_bytes(&sk, &params) {
+        Ok(bn) => Ok(KeyPair { pk: point, sk: bn }),
+        Err(err) => {
+          println!("{}", err);
+          Err(PreErrors::InvalidBytes)
+        }
+      },
+      Err(err) => {
+        println!("{}", err);
+        Err(PreErrors::InvalidBytes)
+      }
     }
   }
 
@@ -121,6 +148,45 @@ impl Signer {
     }
   }
 
+  pub fn to_bytes(&self) -> (Vec<u8>, Vec<u8>) {
+    let sk_bn = CurveBN::from_big_num(self.key.private_key(), &self.params);
+    let pk = self.pk.to_bytes();
+    let sk = sk_bn.to_bytes();
+    (pk, sk)
+  }
+
+  pub fn from_bytes(pk: &Vec<u8>, sk: &Vec<u8>, params: &Rc<Params>) -> Result<Self, PreErrors> {
+    let cp_length = CurvePoint::expected_bytes_length(params);
+    let bn_length = CurveBN::expected_bytes_length(params);
+    if pk.len() != cp_length || sk.len() != bn_length {
+      return Err(PreErrors::InvalidBytes);
+    }
+
+    match CurvePoint::from_bytes(&pk, &params) {
+      Ok(point) => match CurveBN::from_bytes(&sk, &params) {
+        Ok(bn) => match EcKey::from_private_components(params.group(), bn.bn(), point.point()) {
+          Ok(ec_key) => Ok(Signer {
+            key: ec_key,
+            pk: point,
+            params: Rc::clone(&params),
+          }),
+          Err(err) => {
+            println!("{}", err);
+            Err(PreErrors::InvalidBytes)
+          }
+        },
+        Err(err) => {
+          println!("{}", err);
+          Err(PreErrors::InvalidBytes)
+        }
+      },
+      Err(err) => {
+        println!("{}", err);
+        Err(PreErrors::InvalidBytes)
+      }
+    }
+  }
+
   pub fn sign_sha2(&self, data: &Vec<u8>) -> Signature {
     self.sign::<SHA256Hash>(data)
   }
@@ -140,6 +206,10 @@ impl Signer {
 
   pub fn public_key(&self) -> &CurvePoint {
     &self.pk
+  }
+
+  pub fn private_key(&self) -> &EcKey<Private> {
+    &self.key
   }
 
   pub fn params(&self) -> &Rc<Params> {
