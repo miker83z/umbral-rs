@@ -689,7 +689,7 @@ mod tests {
 
     (alice, signer, bob)
   }
-/*
+  /*
   #[test]
   fn new_test_mule_1() {
     let params = new_standard_params();
@@ -917,5 +917,5 @@ mod tests {
       );
     }
   }
+  */
 }
-*/
