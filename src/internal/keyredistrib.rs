@@ -126,7 +126,7 @@ fn compute_secret(shares: &Vec<(CurveBN, CurveBN)>, params: &Rc<Params>) -> Curv
     secret
 }
 
-fn key_refresh(
+pub fn key_refresh(
     priv_key_vec: &Vec<CurveBN>,
     threshold: u32,
     params: &Rc<Params>,
@@ -335,5 +335,40 @@ mod tests {
 
         let mul_points = &curve_bn * &curve_bn2;
         println!("Mul: {:?}", mul_points);
+    }
+
+    #[test]
+    fn test_generate_three_keys() {
+        let params = new_standard_params();
+        for i in 0..5 {
+            let mut alice = KeyPair::new(&params);
+            let alice_keys = alice.to_bytes();
+
+            println!("Alice{} private key: {:?}", i, alice_keys.1);
+            println!("Alice{} public key: {:?}", i, alice_keys.0);
+        }
+    }
+
+    #[test]
+    fn test_unpack_params() {
+        let params = new_standard_params();
+
+        let group = params.group();
+        let g_point = params.g_point();
+        let order = params.order();
+        let u_point = params.u_point();
+        let field_order_size_in_bytes = params.field_order_size_in_bytes();
+        let group_order_size_in_bytes = params.group_order_size_in_bytes();
+        let ctx = params.ctx();
+
+        // let params2 = Params::new(
+        //     group,
+        //     g_point,
+        //     order,
+        //     u_point,
+        //     field_order_size_in_bytes,
+        //     group_order_size_in_bytes,
+        //     ctx,
+        // );
     }
 }
