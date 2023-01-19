@@ -132,44 +132,82 @@ pub fn key_refresh(
     params: &Rc<Params>,
 ) -> HashMap<usize, CurveBN> {
     let N = priv_key_vec.len();
+    // println!(
+    //     "key_refresh: N: {}, threshold: {}, priv_key_vec: {:?}",
+    //     N, threshold, priv_key_vec
+    // );
 
-    for i in 0..N - 1 {
-        println!("priv_key_vec[{}]: {:?}", i, priv_key_vec[i]);
-    }
-
+    // split every share as a key in many subshares
     let mut shares_dict_for_others = HashMap::new();
     let mut priv_key_vec_iter = priv_key_vec.iter();
-    for i in 0..N - 1 {
+    for i in 1..N + 1 {
         let mut coefficients = random_coefficients(
             priv_key_vec_iter.next().unwrap().clone(),
-            threshold,
+            threshold + 1,
             &params,
         );
         let mut shares = create_shares(&coefficients, N as u32, &params);
         shares_dict_for_others.insert(i, shares);
     }
 
-    // shares_dict_for_others
+    // each party uses its shares to create a new share for himself
+    let mut shares_dict_from_others: HashMap<usize, CurveBN> = HashMap::new();
+    for i in 1..N + 1 {
+        // let mut i_share: (CurveBN, CurveBN);
+        let i_bn = CurveBN::from_u32(i as u32, &params);
+        // let mut i_share: (CurveBN, CurveBN) = (i_bn.clone(), CurveBN::from_u32(0, &params));
+        let mut i_share_vec = Vec::new();
+        //get others share
+        for j in 1..N + 1 {
+            let j_bn = CurveBN::from_u32(j as u32, &params);
+            // if i != j {
+            // i gets its shares from all js
+            let vect_of_shares = shares_dict_for_others.get(&j).unwrap();
 
-    let mut curr_share: &(CurveBN, CurveBN);
-    let mut new_priv_keys = HashMap::new();
-    for i in 0..N - 1 {
-        let mut share_sum = CurveBN::from_u32(0, &params);
-        let mut shares_dict_for_others_iter = shares_dict_for_others[&i].iter();
-        for j in 0..N - 1 {
-            let mut interim_share = shares_dict_for_others_iter.next().unwrap();
-            if i != j {
-                curr_share = interim_share;
-                share_sum = &share_sum + &curr_share.1;
+            for share in vect_of_shares.iter() {
+                if share.0.eq(&i_bn) {
+                    let i_share = (j_bn.clone(), share.1.clone());
+                    i_share_vec.push(i_share);
+                }
+                // break;
+                // }
             }
+            // i_share_vec.push(i_share);
         }
-        new_priv_keys.insert(i, share_sum);
+
+        let new_secret = compute_secret(&i_share_vec, &params);
+        shares_dict_from_others.insert(i, new_secret);
     }
 
-    new_priv_keys
+    shares_dict_from_others
 }
+
+//     let mut curr_share: &(CurveBN, CurveBN);
+//     let mut new_priv_keys = HashMap::new();
+//     for i in 0..N - 1 {
+//         let mut share_sum = CurveBN::from_u32(0, &params);
+//         let mut shares_dict_for_others_iter = shares_dict_for_others[&i].iter();
+//         for j in 0..N - 1 {
+//             let mut interim_share = shares_dict_for_others_iter.next().unwrap();
+//             if i != j {
+//                 curr_share = interim_share;
+//                 share_sum = &share_sum + &curr_share.1;
+//             }
+//         }
+//         new_priv_keys.insert(i, share_sum);
+//     }
+
+//     for i in 0..N - 1 {
+//         let mut
+//         println!("new_priv_keys[{}]: {:?}", i, new_priv_keys[&i]);
+//     }
+
+//     new_priv_keys
+// }
 #[cfg(test)]
 mod tests {
+    use std::convert::TryInto;
+
     use super::*;
     // pub use crate::internal::keyredistrib::*;
     // use crate::pre::*;
@@ -286,11 +324,66 @@ mod tests {
             random_coefficients(secret_curve_bn.private_key().clone(), threshold, &params);
 
         let shares = create_shares(&coefficients, threshold, &params);
+
+        for share in shares.iter() {
+            println!("Share: {:?}", share);
+        }
         let computed_secret = compute_secret(&shares, &params);
         // print the secret and the computed secret
         println!("Secret: {:?}", secret_curve_bn.private_key().clone());
         println!("Computed secret: {:?}", computed_secret);
         assert_eq!(computed_secret.eq(secret_curve_bn.private_key()), true);
+    }
+
+    #[test]
+    fn test_secret_sharing_refresh() {
+        let params = new_standard_params();
+        let threshold = 3;
+        let num_parties = threshold + 1;
+
+        // create secret
+        let secret_curve_bn = KeyPair::new(&params);
+
+        // create shares of secret
+        let coefficients =
+            random_coefficients(secret_curve_bn.private_key().clone(), threshold, &params);
+        let shares = create_shares(&coefficients, num_parties, &params);
+
+        // print shares
+        for share in shares.iter() {
+            println!("Share: {:?}", share);
+        }
+
+        // get new shares
+        let shares_to_refresh = shares.iter().map(|x| x.1.clone()).collect::<Vec<CurveBN>>();
+        let new_shares = key_refresh(&shares_to_refresh, threshold, &params);
+
+        let mut new_share_for_secret: Vec<(CurveBN, CurveBN)> = vec![];
+        for share in new_shares.iter() {
+            println!("New Share: {:?}", share);
+            let share_num = share.0.clone();
+            let share_num_bn = CurveBN::from_u32(share_num as u32, &params);
+            let share_bn = share.1.clone();
+
+            new_share_for_secret.push((share_num_bn, share_bn));
+        }
+        let computed_secret = compute_secret(&new_share_for_secret, &params);
+
+        println!("Secret: {:?}", secret_curve_bn.private_key().clone());
+        println!("Computed secret: {:?}", computed_secret);
+        assert_eq!(computed_secret.eq(secret_curve_bn.private_key()), true);
+        // let new_shares = key_refresh(&share_to_refresh, threshold, &params);
+
+        // let mut new_shares_to_refresh: Vec<(CurveBN, CurveBN)> = vec![];
+        // for (num, share) in new_shares.iter() {
+        //     let num_bn = CurveBN::from_u32(*num as u32, &params);
+        //     new_shares_to_refresh.push((num_bn, share.clone()));
+        // }
+        // let computed_secret = compute_secret(&new_shares_to_refresh, &params);
+        // // print the secret and the computed secret
+        // println!("Secret: {:?}", secret_curve_bn.private_key().clone());
+        // println!("Computed secret: {:?}", computed_secret);
+        // assert_eq!(computed_secret.eq(secret_curve_bn.private_key()), true);
     }
 
     #[test]
