@@ -1,5 +1,7 @@
+pub use crate::internal::capsule::*;
 pub use crate::internal::curve::{CurveBN, CurvePoint, Params};
 pub use crate::internal::keys::*;
+pub use crate::internal::kfrag::*;
 pub use crate::pre::*;
 use modinverse::modinverse;
 use rand::{thread_rng, Rng};
@@ -30,6 +32,27 @@ fn mod_inv(x: i32, q: i32) -> Option<i32> {
             q, x,
         ),
     }
+}
+
+fn kfrag_get_rk(kfrag: &KFrag) -> &CurveBN {
+    let rk = kfrag.re_key_share();
+    rk
+}
+
+fn refresh_cfrag(cfrag: CFrag, old_rk: &CurveBN, new_rk: &CurveBN) -> CFrag {
+    let e_i_point = cfrag.e_i_point();
+    let v_i_point = cfrag.v_i_point();
+    let factor = new_rk * &old_rk.invert();
+    let new_e_i_point = e_i_point * &factor;
+    let new_v_i_point = v_i_point * &factor;
+
+    let new_cfrag = CFrag::new(
+        &new_e_i_point,
+        &new_v_i_point,
+        &cfrag.kfrag_id(),
+        &cfrag.precursor(),
+    );
+    new_cfrag
 }
 
 // make a function that takes a two keypairs and swaps them
