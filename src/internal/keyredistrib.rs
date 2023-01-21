@@ -2,7 +2,6 @@ pub use crate::internal::curve::{CurveBN, CurvePoint, Params};
 pub use crate::internal::keys::*;
 pub use crate::pre::*;
 use modinverse::modinverse;
-use openssl::bn::BigNumRef;
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
 
