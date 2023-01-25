@@ -13,7 +13,7 @@ quick_error! {
         display("Encryption error")
       }
       DecryptionError {
-        display("Decryption error")
+        display("Decryption error (wrong key or corrupted ciphertext)")
       }
       DerivationError {
         display("Key Derivation error")

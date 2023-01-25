@@ -296,7 +296,7 @@ pub fn dem_decrypt(
     match cipher.decrypt(nonce, payload) {
         Ok(p) => Ok(p),
         Err(err) => {
-            println!("{}", err);
+            println!("In dem_decrypt we have this error: {}", err);
             return Err(PreErrors::DecryptionError);
         }
     }

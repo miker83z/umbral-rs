@@ -8,6 +8,7 @@ use crate::internal::errors::PreErrors;
 use crate::internal::schemes::{dem_decrypt, dem_encrypt, hash_to_curve_blake, kdf, DEM_MIN_SIZE};
 use crate::internal::utils::{lambda_coeff, new_constant_sorrow, poly_eval};
 
+use std::f32::consts::E;
 use std::rc::Rc;
 
 use openssl::{
@@ -246,7 +247,7 @@ pub fn decrypt(
     }
 }
 
-fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
+pub fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreErrors> {
     // BN context needed for the heap
     let params = from_public_key.params();
 
@@ -269,7 +270,7 @@ fn _encapsulate(from_public_key: &CurvePoint) -> Result<(Vec<u8>, Capsule), PreE
     }
 }
 
-fn _decapsulate(capsule: &Capsule, receiving: &CurveBN) -> Result<Vec<u8>, PreErrors> {
+pub fn _decapsulate(capsule: &Capsule, receiving: &CurveBN) -> Result<Vec<u8>, PreErrors> {
     if !capsule.verify() {
         return Err(PreErrors::InvalidCapsule);
     }

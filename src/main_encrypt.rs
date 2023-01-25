@@ -27,8 +27,10 @@ fn main() {
 
     for kfrag in kfrags {
         let cfrag = reencrypt(&kfrag, &capsule, true, None, true).unwrap();
-        capsule.attach_cfrag(&cfrag).unwrap();
+        // capsule.attach_cfrag(&cfrag).unwrap();
     }
+
+
 
     let plaintext_bob = decrypt(ciphertext, &capsule, &bob, true).unwrap();
     assert_eq!(plaintext, plaintext_bob);

@@ -2,6 +2,7 @@ pub use crate::internal::capsule::*;
 pub use crate::internal::curve::{CurveBN, CurvePoint, Params};
 pub use crate::internal::keys::*;
 pub use crate::internal::kfrag::*;
+pub use crate::internal::utils::*;
 pub use crate::pre::*;
 use modinverse::modinverse;
 use rand::{thread_rng, Rng};
@@ -34,12 +35,12 @@ fn mod_inv(x: i32, q: i32) -> Option<i32> {
     }
 }
 
-fn kfrag_get_rk(kfrag: &KFrag) -> &CurveBN {
+pub fn kfrag_get_rk(kfrag: &KFrag) -> &CurveBN {
     let rk = kfrag.re_key_share();
     rk
 }
 
-fn refresh_cfrag(cfrag: CFrag, old_rk: &CurveBN, new_rk: &CurveBN) -> CFrag {
+pub fn refresh_cfrag(cfrag: CFrag, old_rk: &CurveBN, new_rk: &CurveBN) -> CFrag {
     let e_i_point = cfrag.e_i_point();
     let v_i_point = cfrag.v_i_point();
     let factor = new_rk * &old_rk.invert();
@@ -53,6 +54,11 @@ fn refresh_cfrag(cfrag: CFrag, old_rk: &CurveBN, new_rk: &CurveBN) -> CFrag {
         &cfrag.precursor(),
     );
     new_cfrag
+}
+
+fn get_dh(precursor: &KeyPair, receiving_pk: &CurvePoint) -> CurvePoint {
+    let dh_point = receiving_pk * precursor.private_key();
+    dh_point
 }
 
 // make a function that takes a two keypairs and swaps them
@@ -84,18 +90,22 @@ fn random_coefficients(secret: CurveBN, t: u32, params: &Rc<Params>) -> Vec<Curv
 }
 
 fn compute_polynomial(coefficients: &Vec<CurveBN>, x: u32, params: &Rc<Params>) -> CurveBN {
-    let mut y: CurveBN = CurveBN::from_u32(0, &params);
-    let mut x_pow: u32;
-    let mut x_curve_bn: CurveBN;
-    let mut y_curve_bn: CurveBN;
-    let mut coefficients_iter = coefficients.iter();
-    for i in 0..coefficients.len() {
-        x_pow = x.pow(i as u32);
-        x_curve_bn = CurveBN::from_u32(x_pow, &params);
-        // y_curve_bn = coefficients_iter.next().unwrap();
-        y = &y + &(coefficients_iter.next().unwrap() * &x_curve_bn);
-    }
-    y
+    // let mut y: CurveBN = CurveBN::from_u32(0, &params);
+    // let mut x_pow: u32;
+    // let mut x_curve_bn: CurveBN;
+    // let mut y_curve_bn: CurveBN;
+    // let mut coefficients_iter = coefficients.iter();
+    // for i in 0..coefficients.len() {
+    //     x_pow = x.pow(i as u32);
+    //     x_curve_bn = CurveBN::from_u32(x_pow, &params);
+    //     // y_curve_bn = coefficients_iter.next().unwrap();
+    //     y = &y + &(coefficients_iter.next().unwrap() * &x_curve_bn);
+    // }
+    // y
+
+    let x_bn = CurveBN::from_u32(x, &params);
+    let res = poly_eval(coefficients, &x_bn);
+    res
 }
 
 fn create_shares(
@@ -165,7 +175,7 @@ pub fn key_refresh(
     for i in 1..N + 1 {
         let mut coefficients = random_coefficients(
             priv_key_vec_iter.next().unwrap().clone(),
-            threshold + 1,
+            threshold,
             &params,
         );
         let mut shares = create_shares(&coefficients, N as u32, &params);
