@@ -4,6 +4,7 @@ use crate::internal::keys::Signature;
 use crate::internal::kfrag::KFrag;
 use crate::internal::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
 
+use std::fmt::Debug;
 use std::rc::Rc;
 
 use openssl::bn::{BigNum, BigNumRef};
@@ -163,6 +164,18 @@ pub struct CorrectnessProof {
     metadata: Option<Vec<u8>>,
 }
 
+impl std::fmt::Debug for CorrectnessProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CorrectnessProof")
+            .field("e2", &self.e2)
+            .field("v2", &self.v2)
+            .field("u1", &self.u1)
+            .field("u2", &self.u2)
+            .field("z3", &self.z3)
+            .finish()
+    }
+}
+
 impl Clone for CorrectnessProof {
     fn clone(&self) -> Self {
         CorrectnessProof {
@@ -265,6 +278,7 @@ impl CorrectnessProof {
     }
 }
 
+// #[derive(Debug)]
 pub struct CFrag {
     e_i_point: CurvePoint,
     v_i_point: CurvePoint,
@@ -289,6 +303,20 @@ impl Clone for CFrag {
     }
 }
 
+impl std::fmt::Debug for CFrag {
+    // fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    //     // write the struct fields in the desired format
+    //     write!(f, "CurveBN {{ bn: {:?}}}", self.bn)
+    // }
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "CFrag {{ e_i_point: {:?}, v_i_point: {:?}, kfrag_id: {:?}, precursor: {:?}, proof: {:?} }}",
+            self.e_i_point, self.v_i_point, self.kfrag_id, self.precursor, self.proof
+        )
+    }
+}
+
 impl CFrag {
     pub fn new(
         e_i: &CurvePoint,
@@ -302,6 +330,22 @@ impl CFrag {
             kfrag_id: kfrag_id.to_owned().unwrap(),
             precursor: precursor.to_owned(),
             proof: None,
+        }
+    }
+
+    pub fn new_with_fake_proof(
+        e_i: &CurvePoint,
+        v_i: &CurvePoint,
+        kfrag_id: &BigNumRef,
+        precursor: &CurvePoint,
+        proof: &CorrectnessProof,
+    ) -> Self {
+        CFrag {
+            e_i_point: e_i.to_owned(),
+            v_i_point: v_i.to_owned(),
+            kfrag_id: kfrag_id.to_owned().unwrap(),
+            precursor: precursor.to_owned(),
+            proof: Some(proof.clone()),
         }
     }
 

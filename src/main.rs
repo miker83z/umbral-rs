@@ -1,5 +1,7 @@
-use openssl::bn::BigNum;
-use umbral_rs::internal::keyredistrib::*;
+use std::sync::Arc;
+
+use openssl::bn::{BigNum, BigNumRef};
+use umbral_rs::internal::{keyredistrib::*, kfrag};
 // use umbral_rs::pre::*;
 
 fn main() {
@@ -16,15 +18,16 @@ fn main() {
     let threshold = 2;
     let nodes_number = 6;
 
-    let kfrags = generate_kfrags(
+    let kfrag_raw = generate_kfrags(
         &alice,
         &bob.public_key(),
         threshold,
         nodes_number,
         &signer,
         KFragMode::DelegatingAndReceiving,
-    )
-    .unwrap();
+    );
+    let kfrags = kfrag_raw.0.unwrap();
+    let dh_point = kfrag_raw.1;
 
     let mut cfrags: Vec<CFrag> = vec![];
     for kfrag in kfrags.iter() {
@@ -34,31 +37,48 @@ fn main() {
         // capsule.attach_cfrag(&cfrag).unwrap();
     }
 
+    let mut cfrags_iter = cfrags.iter();
+
     let len_kfrags = nodes_number.clone();
     println!("kfrags len: {:?}", len_kfrags);
 
     let mut secret_vec: Vec<CurveBN> = vec![];
+    let mut ids: Vec<&BigNumRef> = vec![];
+    let precursor = kfrags[0].precursor();
     for kfrag in kfrags.iter() {
         secret_vec.push(kfrag.re_key_share().clone());
+        ids.push(kfrag.id());
     }
-    let res = key_refresh(&secret_vec, threshold as u32, &params);
+    let res = key_refresh(
+        &secret_vec,
+        ids,
+        dh_point,
+        bob.public_key(),
+        precursor,
+        threshold as u32,
+        &params,
+    );
     println!("Result: {:?}", res);
     let u = CurvePoint::from_ec_point(params.u_point(), &params);
     // let mut new_share_for_secret: Vec<(CurveBN, CurveBN)> = vec![];
 
     let mut new_kfrags: Vec<KFrag> = vec![];
     let mut new_cfrags: Vec<CFrag> = vec![];
+    let mut kfrag_iter = kfrags.iter();
 
     for share in res.iter() {
-        let share_num = share.0.clone() - 1;
-        let share_num_bignum = BigNum::from_u32(share.0.clone() as u32).unwrap();
+        // let share_num = share.0.clone() - 1;
+        // let share_num_bignum = BigNum::from_u32(share.0.clone() as u32).unwrap();
+        let curr_id = share.0.bn();
+
         let share_bn = share.1.clone();
-        let curr_kfrag = &kfrags[share_num as usize];
+        let curr_kfrag = kfrag_iter.next().unwrap();
+        // let curr_kfrag = &kfrags[share_num as usize];
         // let id = curr_kfrag.id();
         let re_key_share = share_bn.clone();
         let commitment = &u * &re_key_share;
         let new_curr_kfrag = KFrag::new(
-            &share_num_bignum,
+            curr_id,
             &re_key_share,
             &commitment,
             curr_kfrag.precursor(),
@@ -68,13 +88,19 @@ fn main() {
         );
 
         let new_curr_cfrag = refresh_cfrag(
-            cfrags[share_num as usize].clone(),
+            cfrags_iter.next().unwrap().clone(),
+            curr_id,
             kfrag_get_rk(&curr_kfrag),
             &re_key_share,
         );
 
-        let new_curr_cfrag2 = reencrypt(&new_curr_kfrag, &capsule, false, None, false).unwrap();
+        // println!("new_curr_cfrag: {:?}", new_curr_cfrag);
 
+        // let new_curr_cfrag2 = reencrypt(&new_curr_kfrag, &capsule, false, None, false).unwrap();
+
+        // println!("new_curr_cfrag2:{:?}", new_curr_cfrag2);
+
+        // assert!(new_curr_cfrag.eq(&new_curr_cfrag2));
         new_kfrags.push(new_curr_kfrag);
         new_cfrags.push(new_curr_cfrag);
     }

@@ -7,7 +7,9 @@ use std::{cell::RefCell, rc::Rc};
 use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::ec::{EcGroup, EcGroupRef, EcPoint, EcPointRef, PointConversionForm};
 use openssl::nid::Nid;
-use std::fmt;
+use std::hash::{Hash, Hasher};
+
+use std::fmt::{self, Debug};
 pub struct Params {
     group: EcGroup,
     g_point: EcPoint,
@@ -289,6 +291,26 @@ pub struct CurvePoint {
     params: Rc<Params>,
 }
 
+impl fmt::Debug for CurvePoint {
+    // fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    //     // write the struct fields in the desired format
+    //     write!(f, "CurveBN {{ bn: {:?}}}", self.bn)
+    // }
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "CurvePoint: {:?}",
+            self.point
+                .to_bytes(
+                    &self.params.group(),
+                    PointConversionForm::UNCOMPRESSED,
+                    &mut self.params.ctx().borrow_mut()
+                )
+                .unwrap()
+        )
+    }
+}
+
 impl CurvePoint {
     pub fn new(params: &Rc<Params>) -> Self {
         CurvePoint {
@@ -434,5 +456,23 @@ impl Clone for CurveBN {
             bn: self.bn.to_owned().expect("Error in BN cloning"),
             params: Rc::clone(&self.params),
         }
+    }
+}
+
+impl PartialEq for CurveBN {
+    fn eq(&self, other: &Self) -> bool {
+        if self.params.eq(&other.params) && self.bn.eq(&other.bn) {
+            return true;
+        }
+        return false;
+    }
+}
+
+impl Eq for CurveBN {}
+
+impl Hash for CurveBN {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // self.params.hash(state);
+        self.bn().clone();
     }
 }

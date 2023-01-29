@@ -55,16 +55,22 @@ pub fn generate_kfrags(
     n: usize,
     signer: &Signer,
     mode: KFragMode,
-) -> Result<Vec<KFrag>, PreErrors> {
+) -> (Result<Vec<KFrag>, PreErrors>, CurvePoint) {
+    // a fake point to return in case of error
+    let fake_point = CurvePoint::from_ec_point(
+        delegating_keypair.public_key().params().u_point(),
+        delegating_keypair.public_key().params(),
+    );
+
     if threshold <= 0 || threshold > n {
-        return Err(PreErrors::InvalidKFragThreshold);
+        return (Err(PreErrors::InvalidKFragThreshold), fake_point);
     }
     if !(delegating_keypair
         .public_key()
         .params()
         .eq(receiving_pk.params()))
     {
-        return Err(PreErrors::KeysParametersNotEq);
+        return (Err(PreErrors::KeysParametersNotEq), fake_point);
     }
 
     let params = delegating_keypair.public_key().params();
@@ -105,7 +111,7 @@ pub fn generate_kfrags(
         match kfrag_id.rand(order_bits_size, MsbOption::MAYBE_ZERO, false) {
             Ok(_) => (),
             Err(_) => {
-                return Err(PreErrors::GenericError);
+                return (Err(PreErrors::GenericError), fake_point);
             }
         }
 
@@ -177,7 +183,7 @@ pub fn generate_kfrags(
         ));
     }
 
-    Ok(kfrags)
+    (Ok(kfrags), dh_point)
 }
 
 /// Performs the re-encryption operation of proxies and produces a capsule
