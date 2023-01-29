@@ -15,8 +15,8 @@ fn main() {
 
     capsule.set_correctness_keys(&alice.public_key(), &bob.public_key(), &signer.public_key());
 
-    let threshold = 2;
-    let nodes_number = 6;
+    let threshold = 3;
+    let nodes_number = 5;
 
     let kfrag_raw = generate_kfrags(
         &alice,
@@ -49,6 +49,23 @@ fn main() {
         secret_vec.push(kfrag.re_key_share().clone());
         ids.push(kfrag.id());
     }
+
+    println!("dh_point: {:?}", dh_point.to_bytes());
+    println!("\nprecursor: {:?}", precursor.to_bytes());
+    println!("\nbob public key: {:?}", bob.public_key().to_bytes());
+    println!("\nthreshold: {:?}", threshold);
+
+    let mut count = 0;
+    for priv_key in secret_vec.iter_mut() {
+        println!("{}th priv_key: {:?}", count, priv_key.to_bytes());
+        count += 1;
+    }
+    let mut count = 0;
+    for id in ids.iter() {
+        println!("{}th id: {:?}", count, id.to_hex_str());
+        count += 1;
+    }
+
     let res = key_refresh(
         &secret_vec,
         ids,
