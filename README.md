@@ -40,3 +40,21 @@ let plaintext_bob = decrypt(ciphertext, &capsule, &bob, true).unwrap();
 assert_eq!(plaintext, plaintext_bob);
 println!("{:?}", String::from_utf8(plaintext_bob.to_owned()).unwrap());
 ```
+
+## file documentation
+
+the source code is in the `src` folder, the documentation is in the `docs` folder. Stated briefly, inside the `src/internal` folder there are the following files:
+
+- `keys.rs` contains the `KeyPair` struct, which is used to generate the public and private keys.
+- `capsule.rs` contains the `Capsule` struct, which is used to encapsulate the ciphertext.
+- `kfrag.rs` contains the `KFrag` struct, which is used to delegate the re-encryption rights.
+- `curve.rs` contains the `Curve` struct, which is used to generate the curve parameters.
+- `errors.rs` contains the `UmbralError` enum, which is used to return the errors.
+- `scheme.rs` contains the hashing functions used in the scheme.
+- `utils.rs` contains tilities functions such as `poly_eval` used to evaluate a polynomial at a point.
+
+In the `src` folder there are the following files:
+
+- `pre.rs` contains the main functions to use the library, such as `encrypt`, `decrypt`, `reencrypt`, `generate_kfrags`, etc.
+- `lib.rs` contains the `prelude` module, which is used to import the main functions of the library.
+- `main.rs` contains the `main` function, which is used to run the tests.
