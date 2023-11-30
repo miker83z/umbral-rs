@@ -5,9 +5,7 @@ pub use crate::internal::kfrag::*;
 pub use crate::internal::schemes::hash_to_curve_blake;
 pub use crate::internal::utils::*;
 pub use crate::pre::*;
-use modinverse::modinverse;
-use openssl::bn::{BigNum, BigNumRef};
-use rand::{thread_rng, Rng};
+use openssl::bn::BigNumRef;
 use std::collections::HashMap;
 
 pub fn vec_to_hex(v: &[u8]) -> String {
@@ -15,27 +13,6 @@ pub fn vec_to_hex(v: &[u8]) -> String {
 }
 
 // const PARAMS: Rc<Params> = new_standard_params();
-
-// convert private key to BN
-fn priv_key_to_bn(priv_key: &Vec<u8>) {
-    let params = new_standard_params();
-    let curve_bn = CurveBN::from_bytes(&priv_key, &params).unwrap();
-    // &curve_bn.bn()
-}
-
-// given number x and modulus q invert x mod q
-fn mod_inv(x: i32, q: i32) -> Option<i32> {
-    let x = x.rem_euclid(q);
-
-    let res = modinverse(x, q);
-    match res {
-        Some(x) => res,
-        None => panic!(
-            "Error in mod_inv, modinverse returned None, q: {}, x: {}",
-            q, x,
-        ),
-    }
-}
 
 pub fn kfrag_get_rk(kfrag: &KFrag) -> &CurveBN {
     let rk = kfrag.re_key_share();
@@ -84,7 +61,7 @@ fn get_share_index(
     share_index
 }
 
-fn get_dh(precursor: &KeyPair, receiving_pk: &CurvePoint) -> CurvePoint {
+fn _get_dh(precursor: &KeyPair, receiving_pk: &CurvePoint) -> CurvePoint {
     let dh_point = receiving_pk * precursor.private_key();
     dh_point
 }
@@ -110,50 +87,17 @@ fn random_coefficients(secret: CurveBN, t: u32, params: &Rc<Params>) -> Vec<Curv
     // let mut rng = thread_rng();
     // let zero = CurveBN::from_u32(0, &params);
     let mut coefficients: Vec<CurveBN> = Vec::with_capacity(t as usize);
-    for i in 0..t {
+    for _ in 0..t {
         coefficients.push(CurveBN::rand_curve_bn(&params));
     }
     coefficients[0] = secret;
     coefficients
 }
 
-fn compute_polynomial(coefficients: &Vec<CurveBN>, x: u32, params: &Rc<Params>) -> CurveBN {
-    // let mut y: CurveBN = CurveBN::from_u32(0, &params);
-    // let mut x_pow: u32;
-    // let mut x_curve_bn: CurveBN;
-    // let mut y_curve_bn: CurveBN;
-    // let mut coefficients_iter = coefficients.iter();
-    // for i in 0..coefficients.len() {
-    //     x_pow = x.pow(i as u32);
-    //     x_curve_bn = CurveBN::from_u32(x_pow, &params);
-    //     // y_curve_bn = coefficients_iter.next().unwrap();
-    //     y = &y + &(coefficients_iter.next().unwrap() * &x_curve_bn);
-    // }
-    // y
-
-    let x_bn = CurveBN::from_u32(x, &params);
-    let res = poly_eval(coefficients, &x_bn);
-    res
-}
-
-fn create_shares(
-    coefficients: &Vec<CurveBN>,
-    num_shares: u32,
-    params: &Rc<Params>,
-) -> Vec<(CurveBN, CurveBN)> {
-    let mut shares = Vec::with_capacity(num_shares as usize);
-    // let mut coefficients_iter = coefficients.iter();
-    for i in 1..num_shares + 1 {
-        let mut i_bn = CurveBN::from_u32(i, &params);
-        shares.push((i_bn, compute_polynomial(coefficients, i, params)));
-    }
-    shares
-}
-
 fn create_shares_with_ids(
     coefficients: &Vec<CurveBN>,
     ids: &Vec<CurveBN>,
-    params: &Rc<Params>,
+    _params: &Rc<Params>,
 ) -> Vec<(CurveBN, CurveBN)> {
     // convert ids to curve points
     let mut shares = Vec::with_capacity(ids.len());
@@ -208,7 +152,7 @@ pub fn key_refresh(
     threshold: u32,
     params: &Rc<Params>,
 ) -> HashMap<CurveBN, CurveBN> {
-    let N = priv_key_vec.len();
+    let _ = priv_key_vec.len();
     // println!(
     //     "key_refresh: N: {}, threshold: {}, priv_key_vec: {:?}",
     //     N, threshold, priv_key_vec
@@ -222,12 +166,12 @@ pub fn key_refresh(
         .map(|x| get_share_index(*x, &precursor, &dh_point, receiving_pk, params))
         .collect::<Vec<CurveBN>>();
     for i in share_indexes.iter() {
-        let mut coefficients = random_coefficients(
+        let coefficients = random_coefficients(
             priv_key_vec_iter.next().unwrap().clone(),
             threshold,
             &params,
         );
-        let mut shares = create_shares_with_ids(&coefficients, &share_indexes, &params);
+        let shares = create_shares_with_ids(&coefficients, &share_indexes, &params);
         shares_dict_for_others.insert(i.clone(), shares);
     }
 
@@ -294,11 +238,64 @@ pub fn key_refresh(
 // }
 #[cfg(test)]
 mod tests {
-    use std::convert::TryInto;
-
     use super::*;
+    use modinverse::modinverse;
     // pub use crate::internal::keyredistrib::*;
     // use crate::pre::*;
+
+    // convert private key to BN
+    fn _priv_key_to_bn(priv_key: &Vec<u8>) {
+        let params = new_standard_params();
+        let _curve_bn = CurveBN::from_bytes(&priv_key, &params).unwrap();
+        // &curve_bn.bn()
+    }
+
+    // given number x and modulus q invert x mod q
+    fn mod_inv(x: i32, q: i32) -> Option<i32> {
+        let x = x.rem_euclid(q);
+
+        let res = modinverse(x, q);
+        match res {
+            Some(_) => res,
+            None => panic!(
+                "Error in mod_inv, modinverse returned None, q: {}, x: {}",
+                q, x,
+            ),
+        }
+    }
+
+    fn compute_polynomial(coefficients: &Vec<CurveBN>, x: u32, params: &Rc<Params>) -> CurveBN {
+        // let mut y: CurveBN = CurveBN::from_u32(0, &params);
+        // let mut x_pow: u32;
+        // let mut x_curve_bn: CurveBN;
+        // let mut y_curve_bn: CurveBN;
+        // let mut coefficients_iter = coefficients.iter();
+        // for i in 0..coefficients.len() {
+        //     x_pow = x.pow(i as u32);
+        //     x_curve_bn = CurveBN::from_u32(x_pow, &params);
+        //     // y_curve_bn = coefficients_iter.next().unwrap();
+        //     y = &y + &(coefficients_iter.next().unwrap() * &x_curve_bn);
+        // }
+        // y
+
+        let x_bn = CurveBN::from_u32(x, &params);
+        let res = poly_eval(coefficients, &x_bn);
+        res
+    }
+
+    fn create_shares(
+        coefficients: &Vec<CurveBN>,
+        num_shares: u32,
+        params: &Rc<Params>,
+    ) -> Vec<(CurveBN, CurveBN)> {
+        let mut shares = Vec::with_capacity(num_shares as usize);
+        // let mut coefficients_iter = coefficients.iter();
+        for i in 1..num_shares + 1 {
+            let i_bn = CurveBN::from_u32(i, &params);
+            shares.push((i_bn, compute_polynomial(coefficients, i, params)));
+        }
+        shares
+    }
 
     #[test]
     fn test_inv_mod() {

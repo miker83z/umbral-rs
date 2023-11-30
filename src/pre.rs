@@ -7,8 +7,6 @@ use crate::internal::curve::{CurveBN, CurvePoint};
 use crate::internal::errors::PreErrors;
 use crate::internal::schemes::{dem_decrypt, dem_encrypt, hash_to_curve_blake, kdf, DEM_MIN_SIZE};
 use crate::internal::utils::{lambda_coeff, new_constant_sorrow, poly_eval};
-
-use std::f32::consts::E;
 use std::rc::Rc;
 
 use openssl::{
@@ -386,7 +384,7 @@ fn _open_capsule(
 mod tests {
     use super::*;
     use crate::internal::keys::Signature;
-    use std::{thread, time};
+    //use std::{thread, time};
 
     #[test]
     fn encrypt_simple() {
@@ -429,8 +427,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(_) => assert_eq!(true, true),
-            Err(err) => panic!("Error: {}", err),
+            (Ok(_), _) => assert_eq!(true, true),
+            _ => panic!("Error in generate_kfrags"),
         };
     }
 
@@ -460,8 +458,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(ks) => ks,
-            Err(err) => panic!("Error: {}", err),
+            (Ok(ks), _) => ks,
+            _ => panic!("Error in generate_kfrags"),
         };
 
         let mut res = false;
@@ -497,8 +495,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(ks) => ks,
-            Err(err) => panic!("Error: {}", err),
+            (Ok(ks), _) => ks,
+            _ => panic!("Error in generate_kfrags"),
         };
 
         //reencrypt
@@ -528,8 +526,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(ks) => ks,
-            Err(err) => panic!("Error: {}", err),
+            (Ok(ks), _) => ks,
+            _ => panic!("Error in generate_kfrags"),
         };
 
         let mut res = true;
@@ -568,8 +566,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(ks) => ks,
-            Err(err) => panic!("Error: {}", err),
+            (Ok(ks), _) => ks,
+            _ => panic!("Error in generate_kfrags"),
         };
 
         for kfrag in kfrags {
@@ -665,8 +663,8 @@ mod tests {
             &signer,
             KFragMode::DelegatingAndReceiving,
         ) {
-            Ok(ks) => ks,
-            Err(err) => panic!("Error: {}", err),
+            (Ok(ks), _) => ks,
+            _ => panic!("Error in generate_kfrags"),
         };
         let kf_bytes = kfs[0].to_bytes();
         let kf_new = KFrag::from_bytes(&kf_bytes, &params).expect("KFrag");

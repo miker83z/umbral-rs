@@ -10,9 +10,8 @@ use blake2::{Blake2b, Digest}; // old
                                // use blake2::Blake2bVar;
                                // use blake2::digest::{Update, VariableOutput};
                                // use hex_literal::hex;
-use hex_literal::hex;
-// type Blake2b80 = Blake2b<U10>;
-// extern crate blake2;
+                               // type Blake2b80 = Blake2b<U10>;
+                               // extern crate blake2;
 
 // use blake2::Blake2b;
 use chacha20poly1305::{

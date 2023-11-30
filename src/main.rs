@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
-use openssl::bn::{BigNum, BigNumRef};
-use umbral_rs::internal::{keyredistrib::*, kfrag};
+use openssl::bn::BigNumRef;
+use umbral_rs::internal::keyredistrib::*;
 // use umbral_rs::pre::*;
 
 fn main() {

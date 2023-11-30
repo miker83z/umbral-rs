@@ -7,9 +7,9 @@ use std::{cell::RefCell, rc::Rc};
 use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::ec::{EcGroup, EcGroupRef, EcPoint, EcPointRef, PointConversionForm};
 use openssl::nid::Nid;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use std::fmt::{self, Debug};
 pub struct Params {
     group: EcGroup,
     g_point: EcPoint,
@@ -471,8 +471,8 @@ impl PartialEq for CurveBN {
 impl Eq for CurveBN {}
 
 impl Hash for CurveBN {
-    fn hash<H: Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, _state: &mut H) {
         // self.params.hash(state);
-        self.bn().clone();
+        let _ = self.bn().clone();
     }
 }

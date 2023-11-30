@@ -4,7 +4,6 @@ use crate::internal::keys::Signature;
 use crate::internal::kfrag::KFrag;
 use crate::internal::schemes::{hash_to_curvebn, Blake2bHash, ExtendedKeccak, SHA256Hash};
 
-use std::fmt::Debug;
 use std::rc::Rc;
 
 use openssl::bn::{BigNum, BigNumRef};

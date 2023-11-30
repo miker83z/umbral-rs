@@ -1,6 +1,6 @@
 [package]
 name = "umbral-rs"
-version = "0.0.3"
+version = "0.0.4"
 authors = ["disnocen <fadi.barbara@unito.it>", "miker83z <mikerz83@gmail.com>"]
 readme = "README.md"
 license = "GPL-3.0-only"
